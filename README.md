@@ -14,6 +14,7 @@ Fastrace is a blazingly fast traceroute utility designed for network diagnostics
 - **Maximum Performance**: Optimized for speed with parallel probing and efficient packet handling
 - **Low Memory Footprint**: Minimizes memory allocation and operates with a small, fixed memory budget
 - **Dual Socket Implementation**: Uses UDP for probes and raw sockets for response capture
+- **Visual Route Mapping**: Displays network topology with a structured, tree-like representation
 
 ### Key Components
 
@@ -80,6 +81,13 @@ Fastrace implements precise handling of network protocols:
 - **ICMP Response Processing**: Parsing ICMP responses from routers
 - **Port-based Probe Identification**: Using unique ports to match responses to probes
 
+#### 6. Visual Path Representation
+
+Fastrace provides a structured visual representation of network paths:
+- Tree-like format shows branching at load-balanced routes
+- Clear arrows indicate path progression
+- Distinct formatting for primary and alternative routes
+
 ## Performance Optimizations
 
 ### 1. Non-blocking I/O
@@ -120,6 +128,7 @@ Fastrace significantly outperforms standard traceroute in several key metrics:
 | CPU utilization | 5-8% | 2-3% | 60% less CPU |
 | Packet efficiency | 1 TTL at a time | Up to 5 TTLs concurrently | 5x throughput |
 | Response waiting | Fixed timeouts | Adaptive timeouts | Better adaptation |
+| Visual clarity | Flat output | Hierarchical tree view | Improved readability |
 
 ### Key Performance Differences
 
@@ -203,14 +212,33 @@ sudo ./fastrace google.com
 ### Output Format
 
 ```
-Tracing route to google.com (172.217.169.14)
+Tracing route to google.com (172.217.168.46)
 Maximum hops: 30, Protocol: UDP
-TTL   IP Address         RTT (ms)    Hostname
----   ---------------    --------    --------
-1     192.168.1.1        1.23        router.local
-2     10.0.0.1           5.67        isp-gateway.net
-...
+TTL │ IP Address         (RTT ms)   Hostname
+────┼─────────────────────────────────────────
+1   │→ 192.168.1.1      (  2.58 ms) router.local
+2   │→ * * * (timeout)
+3   │→ * * * (timeout)
+4   │→ 37.26.81.21      ( 88.01 ms)
+5   │→ 79.140.91.10     ( 31.21 ms)
+6   │→ 195.22.202.203   ( 38.73 ms)
+7   │→ 72.14.209.224    ( 60.76 ms)
+      └→ 72.14.223.184   ( 61.65 ms)
+8   │→ 142.251.244.109  ( 59.57 ms)
+      └→ 216.239.62.49   ( 71.36 ms)
+      └→ 142.250.210.95  ( 70.25 ms)
+9   │→ 142.251.247.141  ( 59.79 ms)
+      └→ 142.251.52.85   ( 60.25 ms)
+      └→ 209.85.243.245  ( 62.33 ms)
+10  │→ 34.8.172.215     ( 62.42 ms) 215.172.8.34.bc.googleusercontent.com
 ```
+
+This visual format shows:
+- Primary routes with horizontal arrows (`→`)
+- Alternative/branching paths with indented branch indicators (`└→`)
+- Precise RTT measurements for each hop
+- Hostname resolution where available
+- Clear visualization of load-balanced paths
 
 ## Technical Implementation Details
 
