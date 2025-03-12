@@ -590,3 +590,25 @@ footer {
         font-size: 2rem;
     }
 }
+
+/* Add these styles to the end of your CSS file */
+
+/* Full width card */
+.full-width {
+    width: 100%;
+    margin-bottom: 2rem;
+}
+
+/* Two column grid for the bottom cards */
+.two-column {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+}
+
+/* For mobile responsiveness */
+@media (max-width: 768px) {
+    .two-column {
+        grid-template-columns: 1fr;
+    }
+}

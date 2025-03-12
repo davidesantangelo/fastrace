@@ -246,13 +246,15 @@ recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
     </section>
 
     <section id="usage" class="usage">
-        <div class="container">
-            <h2>Usage</h2>
-            <div class="usage-grid">
-                <div class="usage-card">
-                    <h3>Using Makefile</h3>
-                    <p>The project includes a Makefile for easy compilation and installation:</p>
-                    <pre><code class="language-bash"># Standard optimized build
+    <div class="container">
+        <h2>Usage</h2>
+        
+        <!-- Makefile card - full width on top -->
+        <div class="makefile-section">
+            <div class="usage-card full-width">
+                <h3>Using Makefile</h3>
+                <p>The project includes a Makefile for easy compilation and installation:</p>
+                <pre><code class="language-bash"># Standard optimized build
 make
 
 # Build with debugging symbols
@@ -269,22 +271,26 @@ sudo make uninstall
 
 # Clean build artifacts
 make clean</code></pre>
-                </div>
-                <div class="usage-card">
-                    <h3>Manual Compilation</h3>
-                    <pre><code class="language-bash">gcc -O3 -o fastrace fastrace.c</code></pre>
-                    <p>For maximum performance:</p>
-                    <pre><code class="language-bash">gcc -O3 -march=native -mtune=native -flto -o fastrace fastrace.c</code></pre>
-                </div>
-                <div class="usage-card">
-                    <h3>Basic Usage</h3>
-                    <pre><code class="language-bash">sudo ./fastrace &lt;target&gt;</code></pre>
-                    <p>Example:</p>
-                    <pre><code class="language-bash">sudo ./fastrace google.com</code></pre>
-                </div>
             </div>
         </div>
-    </section>
+        
+        <!-- Manual Compilation and Basic Usage cards - side by side below -->
+        <div class="usage-grid two-column">
+            <div class="usage-card">
+                <h3>Manual Compilation</h3>
+                <pre><code class="language-bash">gcc -O3 -o fastrace fastrace.c</code></pre>
+                <p>For maximum performance:</p>
+                <pre><code class="language-bash">gcc -O3 -march=native -mtune=native -flto -o fastrace fastrace.c</code></pre>
+            </div>
+            <div class="usage-card">
+                <h3>Basic Usage</h3>
+                <pre><code class="language-bash">sudo ./fastrace &lt;target&gt;</code></pre>
+                <p>Example:</p>
+                <pre><code class="language-bash">sudo ./fastrace google.com</code></pre>
+            </div>
+        </div>
+    </div>
+</section>
 
     <section id="technical" class="technical">
         <div class="container">
