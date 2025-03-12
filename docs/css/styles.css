@@ -452,16 +452,29 @@ th {
     font-weight: 600;
 }
 
+/* Updated usage section styles */
+
 /* Usage Section */
 .usage {
     padding: 5rem 0;
 }
 
+/* Base usage grid */
 .usage-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 2rem;
     margin-top: 2rem;
+    width: 100%;
+}
+
+/* Default grid for standard cards */
+.usage-grid:not(.two-column) {
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+/* Specific grid for the two-column layout */
+.usage-grid.two-column {
+    grid-template-columns: 1fr 1fr;
 }
 
 .usage-card {
@@ -469,6 +482,38 @@ th {
     border-radius: var(--radius);
     padding: 2rem;
     box-shadow: var(--shadow);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* Makefile section styling */
+.makefile-section {
+    margin-bottom: 2rem;
+    width: 100%;
+}
+
+/* Full width card adjustments */
+.full-width {
+    width: 100%;
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+    .usage-grid.two-column {
+        grid-template-columns: 1fr;
+    }
+    
+    .usage-card {
+        margin-bottom: 1rem;
+        width: 100%;
+        overflow-x: auto;
+    }
+    
+    /* Ensure code blocks don't overflow on mobile */
+    .usage-card pre {
+        max-width: 100%;
+        overflow-x: auto;
+    }
 }
 
 /* Technical Section */
