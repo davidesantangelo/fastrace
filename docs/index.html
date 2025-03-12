@@ -1,3 +1,4 @@
+/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -5,10 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fastrace - High-Performance Traceroute Implementation</title>
     <link rel="stylesheet" href="css/styles.css">
-    <!-- Sostituisco FontAwesome Kit con il CDN standard di FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
-    <!-- Rimuovo il fallback script poiché ora stiamo usando direttamente il CDN -->
 </head>
 <body>
     <header>
@@ -59,7 +58,9 @@ TTL │ IP Address         (RTT ms)   Hostname
 3   │→ * * * (timeout)
 4   │→ 37.26.81.21      ( 88.01 ms)
 5   │→ 79.140.91.10     ( 31.21 ms)
-6   │→ 195.22.202.203   ( 38.73 ms)</code></pre>
+6   │→ 195.22.202.203   ( 38.73 ms)
+7   │→ 72.14.209.224    ( 60.76 ms)
+      └→ 72.14.223.184   ( 61.65 ms)</code></pre>
                     </div>
                 </div>
             </div>
@@ -249,7 +250,28 @@ recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
             <h2>Usage</h2>
             <div class="usage-grid">
                 <div class="usage-card">
-                    <h3>Compilation</h3>
+                    <h3>Using Makefile</h3>
+                    <p>The project includes a Makefile for easy compilation and installation:</p>
+                    <pre><code class="language-bash"># Standard optimized build
+make
+
+# Build with debugging symbols
+make debug
+
+# Build with maximum performance optimizations
+make optimized
+
+# Install to system (default: /usr/local/bin)
+sudo make install
+
+# Uninstall from system
+sudo make uninstall
+
+# Clean build artifacts
+make clean</code></pre>
+                </div>
+                <div class="usage-card">
+                    <h3>Manual Compilation</h3>
                     <pre><code class="language-bash">gcc -O3 -o fastrace fastrace.c</code></pre>
                     <p>For maximum performance:</p>
                     <pre><code class="language-bash">gcc -O3 -march=native -mtune=native -flto -o fastrace fastrace.c</code></pre>

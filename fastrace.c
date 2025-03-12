@@ -75,6 +75,13 @@
  void debug_print(const char *fmt, ...);
  
  int main(int argc, char *argv[]) {
+     // Check if running as root
+     if (getuid() != 0) {
+         fprintf(stderr, "Error: Fastrace requires root privileges to create raw sockets\n");
+         fprintf(stderr, "Please run with sudo: sudo fastrace <hostname>\n");
+         return 1;
+     }
+     
      /* Check arguments */
      if (argc != 2) {
          print_help();
@@ -183,7 +190,6 @@
              printf("%-3d │ ", ttl);  // Added space after vertical bar
              
              struct in_addr hop_addr = {0};
-             double total_rtt = 0;
              int count = 0;
              struct in_addr hop_addrs[NUM_PROBES];
              double hop_rtts[NUM_PROBES];
@@ -212,7 +218,6 @@
                      }
                      
                      if (hop_addr.s_addr == 0) hop_addr = probes[idx].addr;
-                     total_rtt += probes[idx].rtt;
                      count++;
                  }
              }
@@ -291,7 +296,7 @@
      struct timeval tv;
      gettimeofday(&tv, NULL);
      memcpy(payload, &tv, sizeof(tv));
-     for (int i = sizeof(tv); i < sizeof(payload); i++) {
+     for (size_t i = sizeof(tv); i < sizeof(payload); i++) {
          payload[i] = rand() % 256;
      }
      

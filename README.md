@@ -175,13 +175,37 @@ Fastrace significantly outperforms standard traceroute in several key metrics:
 
 ## Compilation & Installation
 
-### Basic Compilation
+### Using Makefile
+
+The project includes a Makefile for easy compilation and installation:
+
+```bash
+# Standard optimized build
+make
+
+# Build with debugging symbols
+make debug
+
+# Build with maximum performance optimizations
+make optimized
+
+# Install to system (default: /usr/local/bin)
+sudo make install
+
+# Uninstall from system
+sudo make uninstall
+
+# Clean build artifacts
+make clean
+```
+
+### Manual Compilation
+
+If you prefer not to use the Makefile, you can compile directly:
 
 ```bash
 gcc -O3 -o fastrace fastrace.c
 ```
-
-### Advanced Compilation Options
 
 For maximum performance:
 
