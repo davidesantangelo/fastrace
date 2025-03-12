@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fastrace - High-Performance Traceroute Implementation</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <!-- Sostituisco FontAwesome Kit con il CDN standard di FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
+    <!-- Rimuovo il fallback script poiché ora stiamo usando direttamente il CDN -->
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="logo">
+                <i class="fas fa-network-wired"></i>
+                <h1>fastrace</h1>
+            </div>
+            <nav>
+                <a href="#overview">Overview</a>
+                <a href="#architecture">Architecture</a>
+                <a href="#performance">Performance</a>
+                <a href="#usage">Usage</a>
+                <a href="#technical">Technical</a>
+                <a href="https://github.com/davidesantangelo/fastrace" target="_blank" class="github-link">
+                    <i class="fab fa-github"></i> GitHub
+                </a>
+            </nav>
+        </div>
+    </header>
+
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <h2>A high-performance, dependency-free traceroute implementation in pure C</h2>
+                <p>Blazingly fast network diagnostics with minimal footprint</p>
+                <div class="buttons">
+                    <a href="#usage" class="button primary">Get Started</a>
+                    <a href="https://github.com/davidesantangelo/fastrace" class="button secondary" target="_blank">View on GitHub</a>
+                </div>
+            </div>
+            <div class="hero-image">
+                <div class="terminal">
+                    <div class="terminal-header">
+                        <span class="dot red"></span>
+                        <span class="dot yellow"></span>
+                        <span class="dot green"></span>
+                        <span class="terminal-title">Terminal</span>
+                    </div>
+                    <div class="terminal-content">
+                        <pre><code>$ sudo ./fastrace google.com
+Tracing route to google.com (172.217.168.46)
+Maximum hops: 30, Protocol: UDP
+TTL │ IP Address         (RTT ms)   Hostname
+────┼─────────────────────────────────────────
+1   │→ 192.168.1.1      (  2.58 ms) router.local
+2   │→ * * * (timeout)
+3   │→ * * * (timeout)
+4   │→ 37.26.81.21      ( 88.01 ms)
+5   │→ 79.140.91.10     ( 31.21 ms)
+6   │→ 195.22.202.203   ( 38.73 ms)</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="overview" class="overview">
+        <div class="container">
+            <h2>Overview</h2>
+            <p>Fastrace is a blazingly fast traceroute utility designed for network diagnostics and performance analysis. It maps the route that packets take across an IP network from source to destination, providing detailed timing information and identifying potential bottlenecks or routing issues.</p>
+            
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <i class="fas fa-bolt"></i>
+                    <h3>Zero Dependencies</h3>
+                    <p>Relies solely on standard C libraries and system calls</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-tachometer-alt"></i>
+                    <h3>Maximum Performance</h3>
+                    <p>Optimized for speed with parallel probing and efficient packet handling</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-feather"></i>
+                    <h3>Low Memory Footprint</h3>
+                    <p>Minimizes memory allocation and operates with a small, fixed memory budget</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-exchange-alt"></i>
+                    <h3>Dual Socket Implementation</h3>
+                    <p>Uses UDP for probes and raw sockets for response capture</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-project-diagram"></i>
+                    <h3>Visual Route Mapping</h3>
+                    <p>Displays network topology with a structured, tree-like representation</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-laptop-code"></i>
+                    <h3>Pure C Implementation</h3>
+                    <p>Written in standard C for maximum portability and performance</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="architecture" class="architecture">
+        <div class="container">
+            <h2>Technical Architecture</h2>
+            
+            <div class="tabs">
+                <button class="tab-btn active" data-tab="dual-socket">Dual Socket Architecture</button>
+                <button class="tab-btn" data-tab="probe">Probe Structure</button>
+                <button class="tab-btn" data-tab="concurrent">Concurrent Discovery</button>
+                <button class="tab-btn" data-tab="response">Response Processing</button>
+                <button class="tab-btn" data-tab="visualization">Path Visualization</button>
+            </div>
+            
+            <div class="tab-content active" id="dual-socket">
+                <h3>Dual Socket Architecture</h3>
+                <p>Fastrace uses two socket types for maximum effectiveness:</p>
+                <ul>
+                    <li>UDP socket (<code>SOCK_DGRAM</code>) for sending probe packets</li>
+                    <li>Raw ICMP socket (<code>SOCK_RAW</code>) for receiving router responses</li>
+                </ul>
+                <pre><code class="language-c">send_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
+            </div>
+            
+            <div class="tab-content" id="probe">
+                <h3>Probe Structure</h3>
+                <p>Each probe is tracked using a specialized structure:</p>
+                <pre><code class="language-c">typedef struct {
+    int ttl;                /* Time-to-Live value */
+    int probe;              /* Probe sequence number */
+    struct timeval sent_time; /* Timestamp when sent */
+    int received;           /* Whether response was received */
+    struct in_addr addr;    /* Address of responding hop */
+    double rtt;             /* Round-trip time in ms */
+    int port;              /* UDP port used for this probe */
+} probe_t;</code></pre>
+            </div>
+            
+            <div class="tab-content" id="concurrent">
+                <h3>Concurrent Route Discovery</h3>
+                <p>Fastrace implements a multi-TTL probing system that maintains multiple active TTL probes:</p>
+                <pre><code class="language-c">#define MAX_ACTIVE_TTLS 5   /* Maximum number of TTLs probed concurrently */</code></pre>
+                <p>While standard traceroute sequentially probes one TTL at a time, Fastrace processes multiple TTLs concurrently, dramatically reducing total trace time.</p>
+            </div>
+            
+            <div class="tab-content" id="response">
+                <h3>Efficient Response Processing</h3>
+                <p>The response processor uses <code>select()</code> with configurable timeouts to efficiently handle incoming packets without blocking:</p>
+                <pre><code class="language-c">int process_responses(int timeout_ms) {
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(recv_sock, &readfds);
+    
+    struct timeval timeout;
+    timeout.tv_sec = timeout_ms / 1000;
+    timeout.tv_usec = (timeout_ms % 1000) * 1000;
+    
+    int ret = select(recv_sock + 1, &readfds, NULL, NULL, &timeout);
+    /* ... */
+}</code></pre>
+            </div>
+            
+            <div class="tab-content" id="visualization">
+                <h3>Visual Path Representation</h3>
+                <p>Fastrace provides a structured visual representation of network paths:</p>
+                <ul>
+                    <li>Tree-like format shows branching at load-balanced routes</li>
+                    <li>Clear arrows indicate path progression</li>
+                    <li>Distinct formatting for primary and alternative routes</li>
+                </ul>
+                <div class="visual-example">
+                    <pre>7   │→ 72.14.209.224    ( 60.76 ms)
+      └→ 72.14.223.184   ( 61.65 ms)
+8   │→ 142.251.244.109  ( 59.57 ms)
+      └→ 216.239.62.49   ( 71.36 ms)
+      └→ 142.250.210.95  ( 70.25 ms)</pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="performance" class="performance">
+        <div class="container">
+            <h2>Performance Benchmarks</h2>
+            <p>Fastrace significantly outperforms standard traceroute in several key metrics:</p>
+            
+            <div class="comparison-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Metric</th>
+                            <th>Standard Traceroute</th>
+                            <th>Fastrace</th>
+                            <th>Improvement</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Total trace time (30 hops)</td>
+                            <td>~15-20 seconds</td>
+                            <td>~5-8 seconds</td>
+                            <td><span class="highlight">60-70% faster</span></td>
+                        </tr>
+                        <tr>
+                            <td>Memory usage</td>
+                            <td>~400-600 KB</td>
+                            <td>~120-150 KB</td>
+                            <td><span class="highlight">70-75% less memory</span></td>
+                        </tr>
+                        <tr>
+                            <td>CPU utilization</td>
+                            <td>5-8%</td>
+                            <td>2-3%</td>
+                            <td><span class="highlight">60% less CPU</span></td>
+                        </tr>
+                        <tr>
+                            <td>Packet efficiency</td>
+                            <td>1 TTL at a time</td>
+                            <td>Up to 5 TTLs concurrently</td>
+                            <td><span class="highlight">5x throughput</span></td>
+                        </tr>
+                        <tr>
+                            <td>Response waiting</td>
+                            <td>Fixed timeouts</td>
+                            <td>Adaptive timeouts</td>
+                            <td><span class="highlight">Better adaptation</span></td>
+                        </tr>
+                        <tr>
+                            <td>Visual clarity</td>
+                            <td>Flat output</td>
+                            <td>Hierarchical tree view</td>
+                            <td><span class="highlight">Improved readability</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section id="usage" class="usage">
+        <div class="container">
+            <h2>Usage</h2>
+            <div class="usage-grid">
+                <div class="usage-card">
+                    <h3>Compilation</h3>
+                    <pre><code class="language-bash">gcc -O3 -o fastrace fastrace.c</code></pre>
+                    <p>For maximum performance:</p>
+                    <pre><code class="language-bash">gcc -O3 -march=native -mtune=native -flto -o fastrace fastrace.c</code></pre>
+                </div>
+                <div class="usage-card">
+                    <h3>Basic Usage</h3>
+                    <pre><code class="language-bash">sudo ./fastrace &lt;target&gt;</code></pre>
+                    <p>Example:</p>
+                    <pre><code class="language-bash">sudo ./fastrace google.com</code></pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="technical" class="technical">
+        <div class="container">
+            <h2>Technical Requirements</h2>
+            
+            <div class="requirements-grid">
+                <div class="requirements-card">
+                    <h3>System Requirements</h3>
+                    <ul>
+                        <li><strong>Operating System:</strong> Linux, macOS, or other Unix-like systems with raw socket support</li>
+                        <li><strong>Permissions:</strong> Root/sudo access required (raw sockets)</li>
+                        <li><strong>Compiler:</strong> GCC with C99 support or later</li>
+                        <li><strong>Architecture:</strong> x86, x86_64, ARM, or any platform with standard C library support</li>
+                    </ul>
+                </div>
+                <div class="requirements-card">
+                    <h3>Header Dependencies</h3>
+                    <pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;time.h&gt;
+#include &lt;sys/time.h&gt;
+#include &lt;sys/socket.h&gt;
+#include &lt;sys/types.h&gt;
+#include &lt;netinet/in.h&gt;
+#include &lt;netinet/ip.h&gt;
+#include &lt;netinet/ip_icmp.h&gt;
+#include &lt;netinet/udp.h&gt;
+#include &lt;arpa/inet.h&gt;
+#include &lt;netdb.h&gt;
+#include &lt;errno.h&gt;
+#include &lt;signal.h&gt;
+#include &lt;stdarg.h&gt;</code></pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <div class="copyright">
+                    <p>Copyright © 2025 Davide Santangelo</p>
+                </div>
+                <div class="links">
+                    <a href="https://github.com/davidesantangelo" target="_blank">
+                        <i class="fab fa-github"></i> GitHub
+                    </a>
+                    <a href="https://github.com/davidesantangelo/fastrace/blob/main/LICENSE" target="_blank">
+                        <i class="fas fa-balance-scale"></i> License
+                    </a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Syntax highlighting
+            hljs.highlightAll();
+            
+            // Tab functionality
+            const tabButtons = document.querySelectorAll('.tab-btn');
+            tabButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    // Remove active class from all buttons and content
+                    tabButtons.forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    
+                    // Add active class to current button and content
+                    button.classList.add('active');
+                    document.getElementById(button.dataset.tab).classList.add('active');
+                });
+            });
+            
+            // Smooth scrolling for anchor links
+            document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+                anchor.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    
+                    document.querySelector(this.getAttribute('href')).scrollIntoView({
+                        behavior: 'smooth'
+                    });
+                });
+            });
+
+        });
+    </script>
+</body>
+</html>
