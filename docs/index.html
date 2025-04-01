@@ -1,13 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fastrace - High-Performance Traceroute Implementation</title>
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
 </head>
+
 <body>
     <header>
         <div class="container">
@@ -35,7 +38,8 @@
                 <p>Blazingly fast network diagnostics with minimal footprint</p>
                 <div class="buttons">
                     <a href="#usage" class="button primary">Get Started</a>
-                    <a href="https://github.com/davidesantangelo/fastrace" class="button secondary" target="_blank">View on GitHub</a>
+                    <a href="https://github.com/davidesantangelo/fastrace" class="button secondary" target="_blank">View
+                        on GitHub</a>
                 </div>
             </div>
             <div class="hero-image">
@@ -48,18 +52,19 @@
                     </div>
                     <div class="terminal-content">
                         <pre><code>$ sudo ./fastrace google.com
-Tracing route to google.com (172.217.168.46)
+Tracing route to google.com (142.250.180.174)
 Maximum hops: 30, Protocol: UDP
-TTL │ IP Address         (RTT ms)   Hostname
-────┼─────────────────────────────────────────
-1   │→ 192.168.1.1      (  2.58 ms) router.local
-2   │→ * * * (timeout)
-3   │→ * * * (timeout)
-4   │→ 37.26.81.21      ( 88.01 ms)
-5   │→ 79.140.91.10     ( 31.21 ms)
-6   │→ 195.22.202.203   ( 38.73 ms)
-7   │→ 72.14.209.224    ( 60.76 ms)
-      └→ 72.14.223.184   ( 61.65 ms)</code></pre>
+TTL │ IP Address         (RTT ms)    Hostname
+────┼───────────────────────────────────────────
+1   │ → 192.168.1.1     (  3.58 ms)
+2   │ * * * (timeout)
+3   │ * * * (timeout)
+4   │ → 185.89.159.5    (  7.34 ms)
+5   │ → 213.250.43.77   ( 38.62 ms) bsn-250-43-77.static.siol.net
+6   │ → 193.77.107.46   ( 51.31 ms) bsn-77-107-46.static.siol.net
+7   │ * * * (timeout)
+8   │ → 142.251.235.172 ( 36.53 ms)
+      └→ 142.251.235.174 ( 35.54 ms)</code></pre>
                     </div>
                 </div>
             </div>
@@ -69,8 +74,10 @@ TTL │ IP Address         (RTT ms)   Hostname
     <section id="overview" class="overview">
         <div class="container">
             <h2>Overview</h2>
-            <p>Fastrace is a blazingly fast traceroute utility designed for network diagnostics and performance analysis. It maps the route that packets take across an IP network from source to destination, providing detailed timing information and identifying potential bottlenecks or routing issues.</p>
-            
+            <p>Fastrace is a blazingly fast traceroute utility designed for network diagnostics and performance
+                analysis. It maps the route that packets take across an IP network from source to destination, providing
+                detailed timing information and identifying potential bottlenecks or routing issues.</p>
+
             <div class="feature-grid">
                 <div class="feature-card">
                     <i class="fas fa-bolt"></i>
@@ -98,9 +105,9 @@ TTL │ IP Address         (RTT ms)   Hostname
                     <p>Displays network topology with a structured, tree-like representation</p>
                 </div>
                 <div class="feature-card">
-                    <i class="fas fa-laptop-code"></i>
-                    <h3>Pure C Implementation</h3>
-                    <p>Written in standard C for maximum portability and performance</p>
+                    <i class="fas fa-shield-alt"></i>
+                    <h3>Security-Focused Design</h3>
+                    <p>Implements secure socket handling with comprehensive bounds checking</p>
                 </div>
             </div>
         </div>
@@ -109,7 +116,7 @@ TTL │ IP Address         (RTT ms)   Hostname
     <section id="architecture" class="architecture">
         <div class="container">
             <h2>Technical Architecture</h2>
-            
+
             <div class="tabs">
                 <button class="tab-btn active" data-tab="dual-socket">Dual Socket Architecture</button>
                 <button class="tab-btn" data-tab="probe">Probe Structure</button>
@@ -117,7 +124,7 @@ TTL │ IP Address         (RTT ms)   Hostname
                 <button class="tab-btn" data-tab="response">Response Processing</button>
                 <button class="tab-btn" data-tab="visualization">Path Visualization</button>
             </div>
-            
+
             <div class="tab-content active" id="dual-socket">
                 <h3>Dual Socket Architecture</h3>
                 <p>Fastrace uses two socket types for maximum effectiveness:</p>
@@ -128,7 +135,7 @@ TTL │ IP Address         (RTT ms)   Hostname
                 <pre><code class="language-c">send_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
             </div>
-            
+
             <div class="tab-content" id="probe">
                 <h3>Probe Structure</h3>
                 <p>Each probe is tracked using a specialized structure:</p>
@@ -142,17 +149,19 @@ recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
     int port;              /* UDP port used for this probe */
 } probe_t;</code></pre>
             </div>
-            
+
             <div class="tab-content" id="concurrent">
                 <h3>Concurrent Route Discovery</h3>
                 <p>Fastrace implements a multi-TTL probing system that maintains multiple active TTL probes:</p>
                 <pre><code class="language-c">#define MAX_ACTIVE_TTLS 5   /* Maximum number of TTLs probed concurrently */</code></pre>
-                <p>While standard traceroute sequentially probes one TTL at a time, Fastrace processes multiple TTLs concurrently, dramatically reducing total trace time.</p>
+                <p>While standard traceroute sequentially probes one TTL at a time, Fastrace processes multiple TTLs
+                    concurrently, dramatically reducing total trace time.</p>
             </div>
-            
+
             <div class="tab-content" id="response">
                 <h3>Efficient Response Processing</h3>
-                <p>The response processor uses <code>select()</code> with configurable timeouts to efficiently handle incoming packets without blocking:</p>
+                <p>The response processor uses <code>select()</code> with configurable timeouts to efficiently handle
+                    incoming packets without blocking:</p>
                 <pre><code class="language-c">int process_responses(int timeout_ms) {
     fd_set readfds;
     FD_ZERO(&readfds);
@@ -165,8 +174,13 @@ recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
     int ret = select(recv_sock + 1, &readfds, NULL, NULL, &timeout);
     /* ... */
 }</code></pre>
+                <p>RTT calculations are performed with microsecond precision using the <code>timersub</code> macro:</p>
+                <pre><code class="language-c">struct timeval diff;
+timersub(&recv_time, &probes[idx].sent_time, &diff);
+double rtt = ((double)diff.tv_sec * 1000.0) + 
+            ((double)diff.tv_usec / 1000.0);</code></pre>
             </div>
-            
+
             <div class="tab-content" id="visualization">
                 <h3>Visual Path Representation</h3>
                 <p>Fastrace provides a structured visual representation of network paths:</p>
@@ -190,7 +204,7 @@ recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
         <div class="container">
             <h2>Performance Benchmarks</h2>
             <p>Fastrace significantly outperforms standard traceroute in several key metrics:</p>
-            
+
             <div class="comparison-table">
                 <table>
                     <thead>
@@ -238,6 +252,18 @@ recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
                             <td>Hierarchical tree view</td>
                             <td><span class="highlight">Improved readability</span></td>
                         </tr>
+                        <tr>
+                            <td>RTT accuracy</td>
+                            <td>Variable</td>
+                            <td>Highly accurate</td>
+                            <td><span class="highlight">Matches standard tools</span></td>
+                        </tr>
+                        <tr>
+                            <td>Security features</td>
+                            <td>Basic</td>
+                            <td>Comprehensive</td>
+                            <td><span class="highlight">Enhanced protection</span></td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -245,15 +271,15 @@ recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
     </section>
 
     <section id="usage" class="usage">
-    <div class="container">
-        <h2>Usage</h2>
-        
-        <!-- Makefile card - full width on top -->
-        <div class="makefile-section">
-            <div class="usage-card full-width">
-                <h3>Using Makefile</h3>
-                <p>The project includes a Makefile for easy compilation and installation:</p>
-                <pre><code class="language-bash"># Standard optimized build
+        <div class="container">
+            <h2>Usage</h2>
+
+            <!-- Makefile card - full width on top -->
+            <div class="makefile-section">
+                <div class="usage-card full-width">
+                    <h3>Using Makefile</h3>
+                    <p>The project includes a Makefile for easy compilation and installation:</p>
+                    <pre><code class="language-bash"># Standard optimized build
 make
 
 # Build with debugging symbols
@@ -270,39 +296,41 @@ sudo make uninstall
 
 # Clean build artifacts
 make clean</code></pre>
+                </div>
+            </div>
+
+            <!-- Manual Compilation and Basic Usage cards - side by side below -->
+            <div class="usage-grid two-column">
+                <div class="usage-card">
+                    <h3>Manual Compilation</h3>
+                    <pre><code class="language-bash">gcc -O3 -o fastrace fastrace.c</code></pre>
+                    <p>For maximum performance:</p>
+                    <pre><code class="language-bash">gcc -O3 -march=native -mtune=native -flto -o fastrace fastrace.c</code></pre>
+                </div>
+                <div class="usage-card">
+                    <h3>Basic Usage</h3>
+                    <pre><code class="language-bash">sudo ./fastrace &lt;target&gt;</code></pre>
+                    <p>Example:</p>
+                    <pre><code class="language-bash">sudo ./fastrace google.com</code></pre>
+                </div>
             </div>
         </div>
-        
-        <!-- Manual Compilation and Basic Usage cards - side by side below -->
-        <div class="usage-grid two-column">
-            <div class="usage-card">
-                <h3>Manual Compilation</h3>
-                <pre><code class="language-bash">gcc -O3 -o fastrace fastrace.c</code></pre>
-                <p>For maximum performance:</p>
-                <pre><code class="language-bash">gcc -O3 -march=native -mtune=native -flto -o fastrace fastrace.c</code></pre>
-            </div>
-            <div class="usage-card">
-                <h3>Basic Usage</h3>
-                <pre><code class="language-bash">sudo ./fastrace &lt;target&gt;</code></pre>
-                <p>Example:</p>
-                <pre><code class="language-bash">sudo ./fastrace google.com</code></pre>
-            </div>
-        </div>
-    </div>
-</section>
+    </section>
 
     <section id="technical" class="technical">
         <div class="container">
             <h2>Technical Requirements</h2>
-            
+
             <div class="requirements-grid">
                 <div class="requirements-card">
                     <h3>System Requirements</h3>
                     <ul>
-                        <li><strong>Operating System:</strong> Linux, macOS, or other Unix-like systems with raw socket support</li>
+                        <li><strong>Operating System:</strong> Linux, macOS, or other Unix-like systems with raw socket
+                            support</li>
                         <li><strong>Permissions:</strong> Root/sudo access required (raw sockets)</li>
                         <li><strong>Compiler:</strong> GCC with C99 support or later</li>
-                        <li><strong>Architecture:</strong> x86, x86_64, ARM, or any platform with standard C library support</li>
+                        <li><strong>Architecture:</strong> x86, x86_64, ARM, or any platform with standard C library
+                            support</li>
                     </ul>
                 </div>
                 <div class="requirements-card">
@@ -352,7 +380,7 @@ make clean</code></pre>
         document.addEventListener('DOMContentLoaded', () => {
             // Syntax highlighting
             hljs.highlightAll();
-            
+
             // Tab functionality
             const tabButtons = document.querySelectorAll('.tab-btn');
             tabButtons.forEach(button => {
@@ -360,18 +388,18 @@ make clean</code></pre>
                     // Remove active class from all buttons and content
                     tabButtons.forEach(b => b.classList.remove('active'));
                     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-                    
+
                     // Add active class to current button and content
                     button.classList.add('active');
                     document.getElementById(button.dataset.tab).classList.add('active');
                 });
             });
-            
+
             // Smooth scrolling for anchor links
             document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-                anchor.addEventListener('click', function(e) {
+                anchor.addEventListener('click', function (e) {
                     e.preventDefault();
-                    
+
                     document.querySelector(this.getAttribute('href')).scrollIntoView({
                         behavior: 'smooth'
                     });
@@ -381,4 +409,5 @@ make clean</code></pre>
         });
     </script>
 </body>
+
 </html>

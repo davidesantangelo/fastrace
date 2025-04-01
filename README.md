@@ -117,6 +117,17 @@ Designed to be compiled with aggressive optimization flags:
 gcc -O3 -o fastrace fastrace.c
 ```
 
+### 4. Precise RTT Calculation
+
+Uses advanced timing techniques for accurate round-trip time measurements:
+
+```c
+/* Calculate RTT with microsecond precision using timersub */
+struct timeval diff;
+timersub(&recv_time, &probes[idx].sent_time, &diff);
+double rtt = ((double)diff.tv_sec * 1000.0) + ((double)diff.tv_usec / 1000.0);
+```
+
 ## Benchmark Comparison
 
 Fastrace significantly outperforms standard traceroute in several key metrics:
@@ -129,18 +140,7 @@ Fastrace significantly outperforms standard traceroute in several key metrics:
 | Packet efficiency | 1 TTL at a time | Up to 5 TTLs concurrently | 5x throughput |
 | Response waiting | Fixed timeouts | Adaptive timeouts | Better adaptation |
 | Visual clarity | Flat output | Hierarchical tree view | Improved readability |
-
-### Key Performance Differences
-
-1. **Concurrent TTL Probing**: While standard traceroute sequentially probes one TTL at a time, Fastrace processes multiple TTLs concurrently, dramatically reducing total trace time.
-
-2. **Smart Timeout Management**: Fastrace uses dynamic timeout scaling based on hop distance, reducing unnecessary waiting.
-
-3. **Efficient Packet Processing**: Streamlined packet handling code with minimal memory operations.
-
-4. **Zero Dependencies**: No reliance on external libraries, resulting in lower overhead and faster execution.
-
-5. **Optimized Memory Usage**: Pre-allocated data structures and minimal dynamic allocations.
+| RTT accuracy | Variable | Highly accurate | Matches standard tools |
 
 ## Technical Requirements
 
@@ -169,7 +169,7 @@ Fastrace significantly outperforms standard traceroute in several key metrics:
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <errno.h>
-#include <signal.h>
+#include <fcntl.h>
 #include <stdarg.h>
 ```
 

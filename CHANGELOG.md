@@ -1,6 +1,27 @@
 # Changelog
 All notable changes to FastRace will be documented in this file.
 
+## [0.1.2] - 2025-04-01
+
+### Security & Reliability
+- Added proper file descriptor flags with FD_CLOEXEC for socket security
+- Implemented comprehensive bounds checking to prevent buffer overflows
+- Enhanced memory safety with null pointer checks and proper initialization
+- Improved error handling throughout the codebase
+
+### Performance
+- Further optimized socket configuration with larger buffer sizes 
+- Reduced probe delay to 1ms for faster tracing operations
+- Improved RTT measurement accuracy with better timing algorithm
+- Added constants for configurable response processing iterations
+
+### Code Quality
+- Refactored socket management with proper cleanup in error paths
+- Added additional debug information for troubleshooting
+- Improved source code organization with clearer separation of functions
+- Enhanced input validation for more robust operation
+- Fixed potential issues with type casting and numeric comparisons
+
 ## [0.1.1] - 2025-04-01
 
 ### Fixed
