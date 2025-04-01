@@ -35,15 +35,16 @@
 #endif
 
 /* Configuration */
-#define MAX_TTL 30         /* Maximum number of hops */
-#define PACKET_SIZE 60     /* Size of packet to send */
-#define NUM_PROBES 3       /* Number of probes per TTL */
-#define RECV_TIMEOUT 5     /* Socket receive timeout in seconds */
-#define MAX_ACTIVE_TTLS 5  /* Maximum number of TTLs probed concurrently */
-#define DEBUG 0            /* Set to 1 to enable debug output */
-#define WAIT_TIMEOUT_MS 50 /* Moderate timeout for better responsiveness */
-#define TTL_TIMEOUT 5000   /* Timeout per TTL in ms */
-#define BASE_PORT 33434    /* Starting UDP port for probes */
+#define MAX_TTL 30        /* Maximum number of hops */
+#define PACKET_SIZE 60    /* Size of packet to send */
+#define NUM_PROBES 3      /* Number of probes per TTL */
+#define RECV_TIMEOUT 1    /* Socket receive timeout in seconds - reduced from 5 */
+#define MAX_ACTIVE_TTLS 5 /* Maximum number of TTLs probed concurrently */
+#define DEBUG 0           /* Set to 1 to enable debug output */
+#define WAIT_TIMEOUT_MS 1 /* Short timeout for response processing */
+#define TTL_TIMEOUT 1000  /* Reduced from 2000ms to 1000ms timeout per TTL */
+#define BASE_PORT 33434   /* Starting UDP port for probes */
+#define PROBE_DELAY 5000  /* Microseconds between probes (5ms instead of 50ms) */
 
 /* Probe tracking */
 typedef struct
@@ -158,16 +159,16 @@ int main(int argc, char *argv[])
             for (int i = 0; i < NUM_PROBES; i++)
             {
                 send_probe(current_ttl, i);
-                usleep(50000); // 50ms between probes
+                usleep(PROBE_DELAY); // Reduced from 50ms to 5ms
             }
             /* Record time after sending all probes for this TTL */
             gettimeofday(&last_probe_time[current_ttl - 1], NULL);
             current_ttl++;
         }
 
-        /* Process responses in a tight loop */
-        for (int i = 0; i < 10; i++)
-        {
+        /* Process responses with minimal delay between checks */
+        for (int i = 0; i < 30; i++)
+        { // Increased iterations for better response coverage
             process_responses(WAIT_TIMEOUT_MS);
         }
 
@@ -276,6 +277,12 @@ int main(int argc, char *argv[])
         }
     }
 
+    /* Close sockets before exit */
+    if (send_sock >= 0)
+        close(send_sock);
+    if (recv_sock >= 0)
+        close(recv_sock);
+
     return 0;
 }
 
@@ -293,9 +300,12 @@ void send_probe(int ttl, int probe_num)
 
     char payload[PACKET_SIZE];
     memset(payload, 0, sizeof(payload));
+
+    /* Capture time immediately before sending */
     struct timeval tv;
     gettimeofday(&tv, NULL);
     memcpy(payload, &tv, sizeof(tv));
+
     for (size_t i = sizeof(tv); i < sizeof(payload); i++)
     {
         payload[i] = rand() % 256;
@@ -314,7 +324,8 @@ void send_probe(int ttl, int probe_num)
         probes[idx].ttl = ttl;
         probes[idx].probe = probe_num;
         probes[idx].port = port;
-        gettimeofday(&probes[idx].sent_time, NULL);
+        /* Use the same timestamp we put in the payload to ensure consistency */
+        probes[idx].sent_time = tv;
         probes[idx].received = 0;
     }
 }
@@ -384,9 +395,22 @@ int process_responses(int timeout_ms)
                 {
                     probes[idx].received = 1;
                     probes[idx].addr = recv_addr.sin_addr;
-                    double rtt = (recv_time.tv_sec - probes[idx].sent_time.tv_sec) * 1000.0 +
-                                 (recv_time.tv_usec - probes[idx].sent_time.tv_usec) / 1000.0;
+
+                    /* Calculate RTT with higher precision */
+                    struct timeval diff;
+                    timersub(&recv_time, &probes[idx].sent_time, &diff);
+                    double rtt = (double)diff.tv_sec * 1000.0 + (double)diff.tv_usec / 1000.0;
+
+                    /* Use standard timersub for more accurate results */
+                    if (rtt < 0)
+                        rtt = 0;
+
+                    /* Cap at reasonable maximum to handle outliers */
+                    if (rtt > 1000)
+                        rtt = 1000;
+
                     probes[idx].rtt = rtt;
+
                     debug_print("  Matched probe idx=%d (TTL=%d, probe=%d), rtt=%.2fms\n",
                                 idx, ttl, i, rtt);
                     return 1;
@@ -423,3 +447,18 @@ void print_help(void)
     printf("\nExample:\n");
     printf("  sudo ./fastrace google.com\n");
 }
+
+/* Add this helper function for more accurate time difference calculation */
+#ifndef timersub
+#define timersub(a, b, result)                           \
+    do                                                   \
+    {                                                    \
+        (result)->tv_sec = (a)->tv_sec - (b)->tv_sec;    \
+        (result)->tv_usec = (a)->tv_usec - (b)->tv_usec; \
+        if ((result)->tv_usec < 0)                       \
+        {                                                \
+            --(result)->tv_sec;                          \
+            (result)->tv_usec += 1000000;                \
+        }                                                \
+    } while (0)
+#endif

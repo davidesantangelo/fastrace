@@ -1,6 +1,22 @@
 # Changelog
 All notable changes to FastRace will be documented in this file.
 
+## [0.1.1] - 2025-04-01
+
+### Fixed
+- Significantly improved RTT measurement accuracy to align with standard traceroute tools
+- Added proper `timersub` macro for correct time difference calculations with microsecond precision
+- Fixed timestamp handling to ensure accurate RTT measurements
+- Optimized timeout values for more responsive trace results
+
+### Changed
+- Reduced probe delay from 50ms to 5ms for faster tracing
+- Improved response processing with more frequent checks and shorter timeouts
+- Added sanity checks and reasonable caps for RTT values (maximum 1000ms)
+- Reduced socket receive timeout from 5s to 1s
+- Reduced TTL timeout from 5000ms to 1000ms for better responsiveness
+- Improved socket resource cleanup on program exit
+
 ## [0.1.0] - 2025-03-13
 
 ### Added
