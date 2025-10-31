@@ -202,6 +202,19 @@ nav a:hover::after {
     max-width: 600px;
 }
 
+.version-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+    color: white;
+    padding: 0.4rem 0.9rem;
+    border-radius: 20px;
+    font-weight: 600;
+    font-size: 0.875rem;
+    margin-bottom: 1rem;
+    box-shadow: var(--shadow);
+    letter-spacing: 0.5px;
+}
+
 .hero-content h2 {
     font-size: 2.5rem;
     margin-bottom: 1.5rem;

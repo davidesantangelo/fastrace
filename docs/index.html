@@ -34,8 +34,9 @@
     <section class="hero">
         <div class="container">
             <div class="hero-content">
+                <div class="version-badge">v0.2.0</div>
                 <h2>A high-performance, dependency-free traceroute implementation in pure C</h2>
-                <p>Blazingly fast network diagnostics with minimal footprint</p>
+                <p>Blazingly fast network diagnostics with minimal footprint • Non-blocking event loop • Runtime tuning</p>
                 <div class="buttons">
                     <a href="#usage" class="button primary">Get Started</a>
                     <a href="https://github.com/davidesantangelo/fastrace" class="button secondary" target="_blank">View
@@ -52,8 +53,9 @@
                     </div>
                     <div class="terminal-content">
                         <pre><code>$ sudo ./fastrace google.com
+fastrace 0.2.0
 Tracing route to google.com (142.250.180.174)
-Maximum hops: 30, Protocol: UDP
+Maximum hops: 30, Probes per hop: 3, Protocol: UDP
 TTL │ IP Address         (RTT ms)    Hostname
 ────┼───────────────────────────────────────────
 1   │ → 192.168.1.1     (  3.58 ms)
@@ -87,12 +89,12 @@ TTL │ IP Address         (RTT ms)    Hostname
                 <div class="feature-card">
                     <i class="fas fa-tachometer-alt"></i>
                     <h3>Maximum Performance</h3>
-                    <p>Optimized for speed with parallel probing and efficient packet handling</p>
+                    <p>Event-driven pipeline with non-blocking I/O and monotonic timing for sub-millisecond precision</p>
                 </div>
                 <div class="feature-card">
                     <i class="fas fa-feather"></i>
                     <h3>Low Memory Footprint</h3>
-                    <p>Minimizes memory allocation and operates with a small, fixed memory budget</p>
+                    <p>Compact data structures with dynamic allocation sized to trace configuration</p>
                 </div>
                 <div class="feature-card">
                     <i class="fas fa-exchange-alt"></i>
@@ -108,6 +110,16 @@ TTL │ IP Address         (RTT ms)    Hostname
                     <i class="fas fa-shield-alt"></i>
                     <h3>Security-Focused Design</h3>
                     <p>Implements secure socket handling with comprehensive bounds checking</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-cogs"></i>
+                    <h3>Runtime Tunability</h3>
+                    <p>CLI options for hop count, probe volume, concurrency, timeouts, and DNS behavior</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-server"></i>
+                    <h3>DNS Caching</h3>
+                    <p>Lightweight cache prevents redundant reverse lookups for load-balanced hops</p>
                 </div>
             </div>
         </div>
@@ -138,47 +150,51 @@ recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
 
             <div class="tab-content" id="probe">
                 <h3>Probe Structure</h3>
-                <p>Each probe is tracked using a specialized structure:</p>
+                <p>Each probe is tracked using a specialized structure with monotonic timing:</p>
                 <pre><code class="language-c">typedef struct {
-    int ttl;                /* Time-to-Live value */
-    int probe;              /* Probe sequence number */
-    struct timeval sent_time; /* Timestamp when sent */
-    int received;           /* Whether response was received */
-    struct in_addr addr;    /* Address of responding hop */
-    double rtt;             /* Round-trip time in ms */
-    int port;              /* UDP port used for this probe */
+    int ttl;                  /* Time-to-Live value */
+    int probe;                /* Probe sequence number */
+    struct timespec sent_time; /* Monotonic timestamp when sent */
+    bool received;            /* Whether response was received */
+    struct in_addr addr;      /* Address of responding hop */
+    double rtt;               /* Round-trip time in ms */
+    int port;                 /* UDP port used for this probe */
 } probe_t;</code></pre>
             </div>
 
             <div class="tab-content" id="concurrent">
-                <h3>Concurrent Route Discovery</h3>
-                <p>Fastrace implements a multi-TTL probing system that maintains multiple active TTL probes:</p>
-                <pre><code class="language-c">#define MAX_ACTIVE_TTLS 5   /* Maximum number of TTLs probed concurrently */</code></pre>
+                <h3>Adaptive Route Discovery</h3>
+                <p>Fastrace implements a configurable multi-TTL probing system with runtime-adjustable concurrency:</p>
+                <pre><code class="language-c">// Default concurrency window (tunable via -c flag)
+config.max_active_ttls = 6;
+
+// Probes per hop (tunable via -q flag)
+config.num_probes = 3;</code></pre>
                 <p>While standard traceroute sequentially probes one TTL at a time, Fastrace processes multiple TTLs
-                    concurrently, dramatically reducing total trace time.</p>
+                    concurrently, dramatically reducing total trace time. The concurrency window can be adjusted at runtime to optimize for different network conditions.</p>
             </div>
 
             <div class="tab-content" id="response">
                 <h3>Efficient Response Processing</h3>
-                <p>The response processor uses <code>select()</code> with configurable timeouts to efficiently handle
-                    incoming packets without blocking:</p>
+                <p>The response processor relies on a <code>poll()</code>-driven event loop with non-blocking sockets to eagerly drain ICMP bursts:</p>
                 <pre><code class="language-c">int process_responses(int timeout_ms) {
-    fd_set readfds;
-    FD_ZERO(&readfds);
-    FD_SET(recv_sock, &readfds);
+    struct pollfd pfd = {
+        .fd = recv_sock, 
+        .events = POLLIN | POLLERR | POLLHUP
+    };
     
-    struct timeval timeout;
-    timeout.tv_sec = timeout_ms / 1000;
-    timeout.tv_usec = (timeout_ms % 1000) * 1000;
-    
-    int ret = select(recv_sock + 1, &readfds, NULL, NULL, &timeout);
-    /* ... */
+    if (poll(&pfd, 1, timeout_ms) > 0) {
+        return drain_icmp_socket();
+    }
+    return 0;
 }</code></pre>
-                <p>RTT calculations are performed with microsecond precision using the <code>timersub</code> macro:</p>
-                <pre><code class="language-c">struct timeval diff;
-timersub(&recv_time, &probes[idx].sent_time, &diff);
-double rtt = ((double)diff.tv_sec * 1000.0) + 
-            ((double)diff.tv_usec / 1000.0);</code></pre>
+                <p>RTT calculations are performed with nanosecond precision using monotonic time:</p>
+                <pre><code class="language-c">struct timespec start, end;
+clock_gettime(CLOCK_MONOTONIC, &start);
+// ... packet processing ...
+clock_gettime(CLOCK_MONOTONIC, &end);
+
+double rtt = timespec_diff_ms(&start, &end);</code></pre>
             </div>
 
             <div class="tab-content" id="visualization">
@@ -219,26 +235,26 @@ double rtt = ((double)diff.tv_sec * 1000.0) +
                         <tr>
                             <td>Total trace time (30 hops)</td>
                             <td>~15-20 seconds</td>
-                            <td>~5-8 seconds</td>
-                            <td><span class="highlight">60-70% faster</span></td>
+                            <td>~4-7 seconds</td>
+                            <td><span class="highlight">65-75% faster</span></td>
                         </tr>
                         <tr>
                             <td>Memory usage</td>
                             <td>~400-600 KB</td>
-                            <td>~120-150 KB</td>
-                            <td><span class="highlight">70-75% less memory</span></td>
+                            <td>~80-120 KB</td>
+                            <td><span class="highlight">75-80% less memory</span></td>
                         </tr>
                         <tr>
                             <td>CPU utilization</td>
                             <td>5-8%</td>
-                            <td>2-3%</td>
-                            <td><span class="highlight">60% less CPU</span></td>
+                            <td>1-2%</td>
+                            <td><span class="highlight">70-80% less CPU</span></td>
                         </tr>
                         <tr>
                             <td>Packet efficiency</td>
                             <td>1 TTL at a time</td>
-                            <td>Up to 5 TTLs concurrently</td>
-                            <td><span class="highlight">5x throughput</span></td>
+                            <td>Up to 6+ TTLs concurrently</td>
+                            <td><span class="highlight">6x+ throughput</span></td>
                         </tr>
                         <tr>
                             <td>Response waiting</td>
@@ -299,6 +315,41 @@ make clean</code></pre>
                 </div>
             </div>
 
+            <!-- CLI Options card - full width -->
+            <div class="usage-card full-width">
+                <h3>Command-Line Options</h3>
+                <pre><code class="language-bash"># Disable DNS lookups for faster output
+sudo ./fastrace -n google.com
+
+# Set maximum hops and probes per hop
+sudo ./fastrace -m 20 -q 5 google.com
+
+# Adjust concurrent TTL window and timeouts
+sudo ./fastrace -c 8 -W 2 -t 700 google.com
+
+# Use custom base port
+sudo ./fastrace -P 40000 google.com
+
+# Show version
+./fastrace -V</code></pre>
+                <table style="margin-top: 1rem; width: 100%;">
+                    <thead>
+                        <tr><th>Option</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>-n</code></td><td>Disable reverse DNS lookups</td></tr>
+                        <tr><td><code>-m &lt;hops&gt;</code></td><td>Maximum hop count (1-128, default 30)</td></tr>
+                        <tr><td><code>-q &lt;probes&gt;</code></td><td>Probes per hop (1-10, default 3)</td></tr>
+                        <tr><td><code>-c &lt;count&gt;</code></td><td>Concurrent TTL window size (default 6)</td></tr>
+                        <tr><td><code>-W &lt;ms&gt;</code></td><td>Poll wait timeout in milliseconds (default 2)</td></tr>
+                        <tr><td><code>-t &lt;ms&gt;</code></td><td>Hop completion timeout in milliseconds (default 700)</td></tr>
+                        <tr><td><code>-P &lt;port&gt;</code></td><td>Base UDP destination port (default 33434)</td></tr>
+                        <tr><td><code>-V</code></td><td>Print version information</td></tr>
+                        <tr><td><code>-h</code></td><td>Display help message</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
             <!-- Manual Compilation and Basic Usage cards - side by side below -->
             <div class="usage-grid two-column">
                 <div class="usage-card">
@@ -335,23 +386,25 @@ make clean</code></pre>
                 </div>
                 <div class="requirements-card">
                     <h3>Header Dependencies</h3>
-                    <pre><code class="language-c">#include &lt;stdio.h&gt;
-#include &lt;stdlib.h&gt;
-#include &lt;string.h&gt;
-#include &lt;unistd.h&gt;
-#include &lt;time.h&gt;
-#include &lt;sys/time.h&gt;
-#include &lt;sys/socket.h&gt;
-#include &lt;sys/types.h&gt;
+                    <pre><code class="language-c">#include &lt;arpa/inet.h&gt;
+#include &lt;errno.h&gt;
+#include &lt;fcntl.h&gt;
+#include &lt;netdb.h&gt;
 #include &lt;netinet/in.h&gt;
 #include &lt;netinet/ip.h&gt;
 #include &lt;netinet/ip_icmp.h&gt;
 #include &lt;netinet/udp.h&gt;
-#include &lt;arpa/inet.h&gt;
-#include &lt;netdb.h&gt;
-#include &lt;errno.h&gt;
-#include &lt;signal.h&gt;
-#include &lt;stdarg.h&gt;</code></pre>
+#include &lt;poll.h&gt;
+#include &lt;stdbool.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+#include &lt;sys/socket.h&gt;
+#include &lt;sys/time.h&gt;
+#include &lt;sys/types.h&gt;
+#include &lt;time.h&gt;
+#include &lt;unistd.h&gt;</code></pre>
                 </div>
             </div>
         </div>

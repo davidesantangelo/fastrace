@@ -5,24 +5,26 @@
  * Run with: sudo ./fastrace [target]
  */
 
-#define _GNU_SOURCE // Define before including headers to potentially get SOCK_CLOEXEC etc.
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <time.h>
-#include <sys/time.h>
-#include <sys/socket.h>
-#include <sys/types.h>
+#define _GNU_SOURCE
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/udp.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <errno.h>
-#include <fcntl.h>  // Needed for fcntl, F_SETFD, FD_CLOEXEC
-#include <stdarg.h> // Used by debug_print
+#include <poll.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <time.h>
+#include <unistd.h>
 
 #ifndef ICMP_TIME_EXCEEDED
 #define ICMP_TIME_EXCEEDED 11
@@ -34,101 +36,192 @@
 #define ICMP_PORT_UNREACH 3
 #endif
 
-#define MAX_TTL 30
+#define VERSION "0.2.0"
 #define PACKET_SIZE 60
-#define NUM_PROBES 3
-#define RECV_TIMEOUT 1
-#define MAX_ACTIVE_TTLS 5
-#define DEBUG 0
-#define WAIT_TIMEOUT_MS 1
-#define TTL_TIMEOUT 800
-#define BASE_PORT 33434
-#define PROBE_DELAY 1000
-#define MAX_RTT 1000.0
-#define MIN_RTT 0.1
-#define INITIAL_RESP_CHECKS 10
-#define LATER_RESP_CHECKS 40
-#define SOCKET_BUFFER_SIZE 65536
+#define HOST_CACHE_SIZE 256
+#define MAX_TTL_LIMIT 128
+#define MAX_PROBES_LIMIT 10
+#define SOCKET_BUFFER_SIZE 131072
 
 typedef struct
 {
     int ttl;
     int probe;
-    struct timeval sent_time;
-    int received;
+    struct timespec sent_time;
+    bool received;
     struct in_addr addr;
     double rtt;
     int port;
 } probe_t;
 
-int send_sock = -1;
-int recv_sock = -1;
-char *target_host = NULL;
-struct sockaddr_in dest_addr;
-int finished = 0;
-probe_t probes[MAX_TTL * NUM_PROBES];
-struct timeval last_probe_time[MAX_TTL];
-
-void send_probe(int ttl, int probe_num);
-int process_responses(int timeout_ms);
-char *resolve_hostname(struct in_addr addr);
-void print_help(void);
-void debug_print(const char *fmt, ...);
-
-#ifndef timersub
-#define timersub(a, b, result)                           \
-    do                                                   \
-    {                                                    \
-        (result)->tv_sec = (a)->tv_sec - (b)->tv_sec;    \
-        (result)->tv_usec = (a)->tv_usec - (b)->tv_usec; \
-        if ((result)->tv_usec < 0)                       \
-        {                                                \
-            --(result)->tv_sec;                          \
-            (result)->tv_usec += 1000000;                \
-        }                                                \
-    } while (0)
-#endif
-
-void debug_print(const char *fmt, ...)
+typedef struct
 {
-    if (!DEBUG)
-        return;
-    va_list args;
-    va_start(args, fmt);
-    vfprintf(stderr, fmt, args);
-    va_end(args);
-}
+    struct in_addr addr;
+    char *hostname;
+} host_cache_entry_t;
 
-char *resolve_hostname(struct in_addr addr)
+typedef struct
 {
-    struct hostent *host = gethostbyaddr(&addr, sizeof(addr), AF_INET);
-    if (host && host->h_name)
+    int max_ttl;
+    int num_probes;
+    int max_active_ttls;
+    int wait_timeout_ms;
+    int ttl_timeout_ms;
+    int probe_delay_us;
+    int base_port;
+    double min_rtt;
+    double max_rtt;
+    bool dns_enabled;
+} traceroute_config_t;
+
+static traceroute_config_t config = {
+    .max_ttl = 30,
+    .num_probes = 3,
+    .max_active_ttls = 6,
+    .wait_timeout_ms = 2,
+    .ttl_timeout_ms = 700,
+    .probe_delay_us = 250,
+    .base_port = 33434,
+    .min_rtt = 0.05,
+    .max_rtt = 800.0,
+    .dns_enabled = true};
+
+static int send_sock = -1;
+static int recv_sock = -1;
+static char *target_host = NULL;
+static struct sockaddr_in dest_addr;
+static int finished = 0;
+static probe_t *probes = NULL;
+static struct timespec *last_probe_time = NULL;
+static host_cache_entry_t host_cache[HOST_CACHE_SIZE];
+static size_t host_cache_next = 0;
+static unsigned char base_payload[PACKET_SIZE];
+
+static void cleanup(void);
+static void print_help(const char *prog_name);
+static void print_version(void);
+static void initialize_payload(void);
+static void set_cloexec(int fd);
+static void set_nonblocking(int fd);
+static void monotonic_now(struct timespec *ts);
+static double timespec_diff_ms(const struct timespec *start, const struct timespec *end);
+static void send_probe(int ttl, int probe_num);
+static int process_responses(int timeout_ms);
+static int drain_icmp_socket(void);
+static int handle_icmp_packet(const unsigned char *buffer, size_t bytes, const struct sockaddr_in *recv_addr, const struct timespec *recv_time);
+static const char *resolve_hostname_cached(struct in_addr addr);
+static void host_cache_store(struct in_addr addr, const char *hostname);
+static const char *host_cache_lookup(struct in_addr addr);
+static void free_host_cache(void);
+
+static void cleanup(void)
+{
+    if (send_sock >= 0)
     {
-        char *name_copy = strdup(host->h_name);
-        if (!name_copy)
-        {
-            perror("strdup failed in resolve_hostname");
-            // Return NULL if strdup fails
-            return NULL;
-        }
-        return name_copy; // Return allocated copy
+        close(send_sock);
+        send_sock = -1;
     }
-    return NULL;
+    if (recv_sock >= 0)
+    {
+        close(recv_sock);
+        recv_sock = -1;
+    }
+    if (probes)
+    {
+        free(probes);
+        probes = NULL;
+    }
+    if (last_probe_time)
+    {
+        free(last_probe_time);
+        last_probe_time = NULL;
+    }
+    free_host_cache();
 }
 
-void print_help(void)
+static void print_help(const char *prog_name)
 {
-    printf("Usage: sudo ./fastrace <target>\n");
+    printf("fastrace %s - high-performance traceroute\n", VERSION);
+    printf("Usage: sudo %s [options] <target>\n", prog_name);
     printf("\nOptions:\n");
-    printf("  <target>    Target hostname or IP address\n");
-    printf("\nExample:\n");
-    printf("  sudo ./fastrace google.com\n");
+    printf("  -n            Disable reverse DNS lookups\n");
+    printf("  -m <hops>     Maximum hops to trace (1-%d) [default %d]\n", MAX_TTL_LIMIT, config.max_ttl);
+    printf("  -q <probes>   Probes per hop (1-%d) [default %d]\n", MAX_PROBES_LIMIT, config.num_probes);
+    printf("  -c <count>    Concurrent TTL window size [default %d]\n", config.max_active_ttls);
+    printf("  -W <ms>       Poll wait timeout in milliseconds [default %d]\n", config.wait_timeout_ms);
+    printf("  -t <ms>       Hop completion timeout in milliseconds [default %d]\n", config.ttl_timeout_ms);
+    printf("  -P <port>     Base UDP destination port [default %d]\n", config.base_port);
+    printf("  -V            Print version and exit\n");
+    printf("  -h            Show this help message\n");
 }
 
-void send_probe(int ttl, int probe_num)
+static void print_version(void)
+{
+    printf("fastrace %s\n", VERSION);
+}
+
+static void initialize_payload(void)
+{
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    arc4random_buf(base_payload, sizeof(base_payload));
+#else
+    for (size_t i = 0; i < sizeof(base_payload); i++)
+    {
+        base_payload[i] = (unsigned char)(rand() & 0xFF);
+    }
+#endif
+}
+
+static void set_cloexec(int fd)
+{
+    int flags = fcntl(fd, F_GETFD);
+    if (flags == -1)
+        return;
+    fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+
+static void set_nonblocking(int fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1)
+        return;
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static void monotonic_now(struct timespec *ts)
+{
+#if defined(CLOCK_MONOTONIC)
+    if (clock_gettime(CLOCK_MONOTONIC, ts) == 0)
+    {
+        return;
+    }
+#endif
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    ts->tv_sec = tv.tv_sec;
+    ts->tv_nsec = tv.tv_usec * 1000;
+}
+
+static double timespec_diff_ms(const struct timespec *start, const struct timespec *end)
+{
+    time_t sec = end->tv_sec - start->tv_sec;
+    long nsec = end->tv_nsec - start->tv_nsec;
+    if (nsec < 0)
+    {
+        sec -= 1;
+        nsec += 1000000000L;
+    }
+    return (double)sec * 1000.0 + (double)nsec / 1000000.0;
+}
+
+static void send_probe(int ttl, int probe_num)
 {
     if (send_sock < 0)
-        return; // Check if socket is valid
+        return;
+    if (ttl < 1 || ttl > config.max_ttl)
+        return;
+    if (probe_num < 0 || probe_num >= config.num_probes)
+        return;
 
     if (setsockopt(send_sock, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) < 0)
     {
@@ -136,412 +229,497 @@ void send_probe(int ttl, int probe_num)
         return;
     }
 
-    int port = BASE_PORT + (ttl * NUM_PROBES) + probe_num;
+    int port = config.base_port + ((ttl - 1) * config.num_probes) + probe_num;
     struct sockaddr_in probe_dest = dest_addr;
     probe_dest.sin_port = htons(port);
 
-    char payload[PACKET_SIZE];
-    memset(payload, 0, sizeof(payload));
-
     struct timeval tv;
-
-    // Fill payload *after* tv struct size offset
-    for (size_t i = sizeof(tv); i < sizeof(payload); i++)
-    {
-        payload[i] = rand() % 256;
-    }
-
     gettimeofday(&tv, NULL);
-    memcpy(payload, &tv, sizeof(tv)); // Embed timestamp
 
-    if (sendto(send_sock, payload, sizeof(payload), 0,
-               (struct sockaddr *)&probe_dest, sizeof(probe_dest)) < 0)
+    unsigned char payload[PACKET_SIZE];
+    memcpy(payload, base_payload, sizeof(payload));
+    memcpy(payload, &tv, sizeof(tv));
+
+    if (sendto(send_sock, payload, sizeof(payload), 0, (struct sockaddr *)&probe_dest, sizeof(probe_dest)) < 0)
     {
-        // Avoid flooding stderr if destination is unreachable quickly
-        // Consider adding rate limiting or smarter error handling if needed
-        // perror("Error sending packet");
         return;
     }
 
-    int idx = (ttl - 1) * NUM_PROBES + probe_num;
-    if (idx >= 0 && idx < MAX_TTL * NUM_PROBES)
+    struct timespec send_time;
+    monotonic_now(&send_time);
+
+    size_t idx = (size_t)(ttl - 1) * (size_t)config.num_probes + (size_t)probe_num;
+    probes[idx].ttl = ttl;
+    probes[idx].probe = probe_num;
+    probes[idx].port = port;
+    probes[idx].sent_time = send_time;
+    probes[idx].received = false;
+    probes[idx].addr.s_addr = 0;
+    probes[idx].rtt = 0.0;
+}
+
+static int process_responses(int timeout_ms)
+{
+    if (recv_sock < 0)
+        return -1;
+
+    if (timeout_ms < 0)
+        timeout_ms = 0;
+
+    if (timeout_ms > 0)
     {
-        probes[idx].ttl = ttl;
-        probes[idx].probe = probe_num;
-        probes[idx].port = port;
-        probes[idx].sent_time = tv; // Store the exact time sent
-        probes[idx].received = 0;
-        probes[idx].rtt = 0.0; // Initialize RTT
+        struct pollfd pfd = {.fd = recv_sock, .events = POLLIN | POLLERR | POLLHUP};
+        int ret = poll(&pfd, 1, timeout_ms);
+        if (ret < 0)
+        {
+            if (errno == EINTR)
+                return 0;
+            perror("poll error");
+            return -1;
+        }
+        if (ret == 0)
+            return 0;
+        if (!(pfd.revents & (POLLIN | POLLERR | POLLHUP)))
+            return 0;
     }
-    else
+
+    return drain_icmp_socket();
+}
+
+static int drain_icmp_socket(void)
+{
+    int processed = 0;
+
+    for (;;)
     {
-        fprintf(stderr, "Warning: Probe index %d out of bounds (TTL: %d, Probe: %d)\n", idx, ttl, probe_num);
+        struct sockaddr_in recv_addr;
+        socklen_t addr_len = sizeof(recv_addr);
+        unsigned char buffer[2048];
+        ssize_t bytes = recvfrom(recv_sock, buffer, sizeof(buffer), MSG_DONTWAIT, (struct sockaddr *)&recv_addr, &addr_len);
+
+        if (bytes < 0)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                break;
+            if (errno == EINTR)
+                continue;
+            perror("recvfrom error");
+            break;
+        }
+
+        struct timespec recv_time;
+        monotonic_now(&recv_time);
+
+        if (handle_icmp_packet(buffer, (size_t)bytes, &recv_addr, &recv_time) > 0)
+        {
+            processed++;
+        }
+    }
+
+    return processed;
+}
+
+static int handle_icmp_packet(const unsigned char *buffer, size_t bytes, const struct sockaddr_in *recv_addr, const struct timespec *recv_time)
+{
+    if (bytes < sizeof(struct ip))
+        return 0;
+
+    const struct ip *ip = (const struct ip *)buffer;
+    int ip_header_len = ip->ip_hl << 2;
+    if (ip_header_len <= 0 || (size_t)ip_header_len >= bytes)
+        return 0;
+
+    if (bytes < (size_t)(ip_header_len + ICMP_MINLEN))
+        return 0;
+
+    const struct icmp *icmp = (const struct icmp *)(buffer + ip_header_len);
+    if (!(icmp->icmp_type == ICMP_TIME_EXCEEDED ||
+          (icmp->icmp_type == ICMP_DEST_UNREACH && icmp->icmp_code == ICMP_PORT_UNREACH)))
+    {
+        return 1;
+    }
+
+    if (bytes < (size_t)(ip_header_len + 8 + sizeof(struct ip)))
+        return 1;
+
+    const struct ip *orig_ip = (const struct ip *)(buffer + ip_header_len + 8);
+    int orig_ip_header_len = orig_ip->ip_hl << 2;
+    if (orig_ip_header_len <= 0)
+        return 1;
+
+    size_t required = (size_t)ip_header_len + 8 + (size_t)orig_ip_header_len + sizeof(struct udphdr);
+    if (bytes < required)
+        return 1;
+
+    const struct udphdr *orig_udp = (const struct udphdr *)(buffer + ip_header_len + 8 + orig_ip_header_len);
+    int orig_port = ntohs(orig_udp->uh_dport);
+
+    size_t total_slots = (size_t)config.max_ttl * (size_t)config.num_probes;
+    for (size_t idx = 0; idx < total_slots; idx++)
+    {
+        if (!probes[idx].received && probes[idx].port == orig_port)
+        {
+            double rtt = timespec_diff_ms(&probes[idx].sent_time, recv_time);
+            if (rtt < config.min_rtt)
+                rtt = config.min_rtt;
+            else if (rtt > config.max_rtt)
+                rtt = config.max_rtt;
+
+            probes[idx].received = true;
+            probes[idx].addr = recv_addr->sin_addr;
+            probes[idx].rtt = rtt;
+
+            if (recv_addr->sin_addr.s_addr == dest_addr.sin_addr.s_addr &&
+                icmp->icmp_type == ICMP_DEST_UNREACH &&
+                icmp->icmp_code == ICMP_PORT_UNREACH)
+            {
+                finished = 1;
+            }
+            return 1;
+        }
+    }
+
+    return 1;
+}
+
+static const char *host_cache_lookup(struct in_addr addr)
+{
+    for (size_t i = 0; i < HOST_CACHE_SIZE; i++)
+    {
+        if (host_cache[i].hostname && host_cache[i].addr.s_addr == addr.s_addr)
+        {
+            return host_cache[i].hostname;
+        }
+    }
+    return NULL;
+}
+
+static void host_cache_store(struct in_addr addr, const char *hostname)
+{
+    size_t slot = host_cache_next % HOST_CACHE_SIZE;
+    host_cache_next = (host_cache_next + 1) % HOST_CACHE_SIZE;
+
+    if (host_cache[slot].hostname)
+    {
+        free(host_cache[slot].hostname);
+        host_cache[slot].hostname = NULL;
+    }
+
+    host_cache[slot].addr = addr;
+    host_cache[slot].hostname = strdup(hostname);
+}
+
+static void free_host_cache(void)
+{
+    for (size_t i = 0; i < HOST_CACHE_SIZE; i++)
+    {
+        if (host_cache[i].hostname)
+        {
+            free(host_cache[i].hostname);
+            host_cache[i].hostname = NULL;
+        }
     }
 }
 
-int process_responses(int timeout_ms)
+static const char *resolve_hostname_cached(struct in_addr addr)
 {
-    fd_set readfds;
-    FD_ZERO(&readfds);
-    if (recv_sock < 0)
-        return -1; // Socket not open
-    FD_SET(recv_sock, &readfds);
+    if (!config.dns_enabled)
+        return NULL;
 
-    struct timeval timeout;
-    timeout.tv_sec = timeout_ms / 1000;
-    timeout.tv_usec = (timeout_ms % 1000) * 1000;
+    const char *cached = host_cache_lookup(addr);
+    if (cached)
+        return cached;
 
-    int ret = select(recv_sock + 1, &readfds, NULL, NULL, &timeout);
-    if (ret < 0)
+    char host[NI_MAXHOST];
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_addr = addr;
+
+    if (getnameinfo((struct sockaddr *)&sa, sizeof(sa), host, sizeof(host), NULL, 0, NI_NAMEREQD) != 0)
     {
-        if (errno == EINTR)
-            return 0; // Interrupted, try again
-        perror("select error");
-        return -1; // Indicate error
-    }
-    if (ret == 0)
-    {
-        return 0; // Timeout
+        return NULL;
     }
 
-    if (!FD_ISSET(recv_sock, &readfds))
-    {
-        return 0; // Should not happen if select returned > 0
-    }
-
-    char buffer[1500];
-    struct sockaddr_in recv_addr;
-    socklen_t addr_len = sizeof(recv_addr);
-
-    // Use ssize_t for recvfrom return value
-    ssize_t bytes = recvfrom(recv_sock, buffer, sizeof(buffer), 0,
-                             (struct sockaddr *)&recv_addr, &addr_len);
-
-    if (bytes <= 0)
-    {
-        if (errno == EAGAIN || errno == EWOULDBLOCK)
-            return 0; // No data available right now
-        perror("recvfrom error");
-        return 0; // Treat other errors as no response received for now
-    }
-
-    struct timeval recv_time;
-    gettimeofday(&recv_time, NULL);
-
-    struct ip *ip = (struct ip *)buffer;
-    int ip_header_len = ip->ip_hl << 2;
-    // Use size_t for comparison with bytes
-    if ((size_t)bytes < (size_t)(ip_header_len + ICMP_MINLEN))
-    {
-        debug_print("Packet too small: %zd bytes\n", bytes);
-        return 0;
-    }
-
-    struct icmp *icmp = (struct icmp *)(buffer + ip_header_len);
-    debug_print("Received ICMP type: %d, code: %d from %s\n",
-                icmp->icmp_type, icmp->icmp_code, inet_ntoa(recv_addr.sin_addr));
-
-    if (icmp->icmp_type == ICMP_TIME_EXCEEDED ||
-        (icmp->icmp_type == ICMP_DEST_UNREACH && icmp->icmp_code == ICMP_PORT_UNREACH))
-    {
-        // ICMP header + original IP header + 8 bytes of original UDP header
-        const size_t min_payload_size = 8 + sizeof(struct ip) + 8; // Use size_t
-        // Fix warning: Cast bytes to size_t for comparison
-        if ((size_t)bytes < (size_t)(ip_header_len + min_payload_size))
-        {
-            debug_print("  ICMP payload too small for original headers\n");
-            return 1; // Processed this packet, even if invalid
-        }
-
-        struct ip *orig_ip = (struct ip *)(buffer + ip_header_len + 8);
-        int orig_ip_header_len = orig_ip->ip_hl << 2;
-
-        // Check if enough data for original UDP header
-        // Fix warning: Cast bytes to size_t for comparison
-        if ((size_t)bytes < (size_t)(ip_header_len + 8 + orig_ip_header_len + sizeof(struct udphdr)))
-        {
-            debug_print("  Not enough data for original UDP header\n");
-            return 1;
-        }
-
-        struct udphdr *orig_udp = (struct udphdr *)(buffer + ip_header_len + 8 + orig_ip_header_len);
-        int orig_port = ntohs(orig_udp->uh_dport);
-
-        // Find matching probe based on original destination port
-        for (int ttl = 1; ttl <= MAX_TTL; ttl++)
-        {
-            for (int i = 0; i < NUM_PROBES; i++)
-            {
-                int idx = (ttl - 1) * NUM_PROBES + i;
-                if (idx < 0 || idx >= MAX_TTL * NUM_PROBES)
-                    continue; // Bounds check
-
-                if (!probes[idx].received && probes[idx].port == orig_port)
-                {
-                    probes[idx].received = 1;
-                    probes[idx].addr = recv_addr.sin_addr;
-
-                    struct timeval diff;
-                    timersub(&recv_time, &probes[idx].sent_time, &diff);
-
-                    double rtt = ((double)diff.tv_sec * 1000.0) +
-                                 ((double)diff.tv_usec / 1000.0);
-
-                    if (rtt < MIN_RTT)
-                        rtt = MIN_RTT;
-                    else if (rtt > MAX_RTT)
-                        rtt = MAX_RTT;
-
-                    probes[idx].rtt = rtt;
-
-                    debug_print("  Matched probe idx=%d (TTL=%d, probe=%d), rtt=%.2fms\n",
-                                idx, ttl, i, rtt);
-                    return 1; // Found match
-                }
-            }
-        }
-        debug_print("  No matching probe found for port %d\n", orig_port);
-    }
-    return 1; // Processed ICMP packet, even if not matched
+    host_cache_store(addr, host);
+    return host_cache_lookup(addr);
 }
 
 int main(int argc, char *argv[])
 {
-    if (argc != 2)
+    atexit(cleanup);
+
+    int opt;
+    while ((opt = getopt(argc, argv, "hnVm:q:c:W:t:P:")) != -1)
     {
-        print_help();
+        switch (opt)
+        {
+        case 'h':
+            print_help(argv[0]);
+            return 0;
+        case 'V':
+            print_version();
+            return 0;
+        case 'n':
+            config.dns_enabled = false;
+            break;
+        case 'm':
+        {
+            int value = atoi(optarg);
+            if (value < 1 || value > MAX_TTL_LIMIT)
+            {
+                fprintf(stderr, "Invalid max TTL: %s\n", optarg);
+                return 1;
+            }
+            config.max_ttl = value;
+            break;
+        }
+        case 'q':
+        {
+            int value = atoi(optarg);
+            if (value < 1 || value > MAX_PROBES_LIMIT)
+            {
+                fprintf(stderr, "Invalid probes per hop: %s\n", optarg);
+                return 1;
+            }
+            config.num_probes = value;
+            break;
+        }
+        case 'c':
+        {
+            int value = atoi(optarg);
+            if (value < 1)
+            {
+                fprintf(stderr, "Invalid concurrency window: %s\n", optarg);
+                return 1;
+            }
+            config.max_active_ttls = value;
+            break;
+        }
+        case 'W':
+        {
+            int value = atoi(optarg);
+            if (value < 0)
+            {
+                fprintf(stderr, "Invalid poll timeout: %s\n", optarg);
+                return 1;
+            }
+            config.wait_timeout_ms = value;
+            break;
+        }
+        case 't':
+        {
+            int value = atoi(optarg);
+            if (value < 1)
+            {
+                fprintf(stderr, "Invalid hop timeout: %s\n", optarg);
+                return 1;
+            }
+            config.ttl_timeout_ms = value;
+            break;
+        }
+        case 'P':
+        {
+            int value = atoi(optarg);
+            if (value < 1024 || value > 65535)
+            {
+                fprintf(stderr, "Invalid base port: %s\n", optarg);
+                return 1;
+            }
+            config.base_port = value;
+            break;
+        }
+        default:
+            print_help(argv[0]);
+            return 1;
+        }
+    }
+
+    if (optind >= argc)
+    {
+        print_help(argv[0]);
         return 1;
     }
 
+    target_host = argv[optind];
+
+    if (config.max_active_ttls < 1)
+        config.max_active_ttls = 1;
+    if (config.max_active_ttls > config.max_ttl)
+        config.max_active_ttls = config.max_ttl;
+
     srand((unsigned int)time(NULL));
-    target_host = argv[1];
+    initialize_payload();
 
     memset(&dest_addr, 0, sizeof(dest_addr));
     dest_addr.sin_family = AF_INET;
 
-    struct hostent *host = gethostbyname(target_host);
-    if (!host)
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    struct addrinfo *result = NULL;
+    int gai_err = getaddrinfo(target_host, NULL, &hints, &result);
+    if (gai_err != 0 || !result)
     {
-        if (inet_pton(AF_INET, target_host, &dest_addr.sin_addr) <= 0)
-        {
-            fprintf(stderr, "Error: Could not resolve host '%s'\n", target_host);
-            return 1;
-        }
-    }
-    else
-    {
-        // Ensure host->h_addr_list[0] is not NULL before dereferencing
-        if (host->h_addr_list && host->h_addr_list[0])
-        {
-            memcpy(&dest_addr.sin_addr, host->h_addr_list[0], host->h_length);
-        }
-        else
-        {
-            fprintf(stderr, "Error: Could not get address from resolved host '%s'\n", target_host);
-            return 1;
-        }
+        fprintf(stderr, "Error: Cannot resolve host '%s': %s\n", target_host, gai_strerror(gai_err));
+        return 1;
     }
 
-    printf("Tracing route to %s (%s)\n",
-           target_host,
-           inet_ntoa(dest_addr.sin_addr));
-    printf("Maximum hops: %d, Protocol: UDP\n", MAX_TTL);
+    memcpy(&dest_addr, result->ai_addr, sizeof(struct sockaddr_in));
+    freeaddrinfo(result);
+
+    char dest_ip[INET_ADDRSTRLEN];
+    if (!inet_ntop(AF_INET, &dest_addr.sin_addr, dest_ip, sizeof(dest_ip)))
+    {
+        strncpy(dest_ip, "<unknown>", sizeof(dest_ip));
+        dest_ip[sizeof(dest_ip) - 1] = '\0';
+    }
+
+    printf("fastrace %s\n", VERSION);
+    printf("Tracing route to %s (%s)\n", target_host, dest_ip);
+    printf("Maximum hops: %d, Probes per hop: %d, Protocol: UDP\n", config.max_ttl, config.num_probes);
     printf("TTL │ IP Address         (RTT ms)    Hostname\n");
     printf("────┼───────────────────────────────────────────\n");
 
-    // Create sockets without SOCK_CLOEXEC initially
+    size_t total_slots = (size_t)config.max_ttl * (size_t)config.num_probes;
+    probes = calloc(total_slots, sizeof(probe_t));
+    last_probe_time = calloc((size_t)config.max_ttl, sizeof(struct timespec));
+    if (!probes || !last_probe_time)
+    {
+        fprintf(stderr, "Error: Memory allocation failed\n");
+        return 1;
+    }
+
     send_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (send_sock < 0)
     {
         perror("Error creating UDP socket");
         return 1;
     }
-    // Set FD_CLOEXEC manually
-    if (fcntl(send_sock, F_SETFD, FD_CLOEXEC) == -1)
-    {
-        perror("Warning: Failed to set FD_CLOEXEC on send socket");
-        // Non-fatal, continue
-    }
+    set_cloexec(send_sock);
 
     recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (recv_sock < 0)
     {
         perror("Error creating ICMP socket. Are you running as root?");
-        close(send_sock); // Close already opened socket
         return 1;
     }
-    // Set FD_CLOEXEC manually
-    if (fcntl(recv_sock, F_SETFD, FD_CLOEXEC) == -1)
-    {
-        perror("Warning: Failed to set FD_CLOEXEC on receive socket");
-        // Non-fatal, continue
-    }
-
-    struct timeval timeout;
-    timeout.tv_sec = RECV_TIMEOUT;
-    timeout.tv_usec = 0;
-    if (setsockopt(recv_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0)
-    {
-        perror("Error setting receive timeout");
-        close(send_sock);
-        close(recv_sock);
-        return 1;
-    }
-
-    memset(probes, 0, sizeof(probes));
-    memset(last_probe_time, 0, sizeof(last_probe_time));
+    set_cloexec(recv_sock);
+    set_nonblocking(recv_sock);
 
     int sndbuff = SOCKET_BUFFER_SIZE;
     int rcvbuff = SOCKET_BUFFER_SIZE;
-    // Ignore errors for buffer size setting, not critical
     setsockopt(send_sock, SOL_SOCKET, SO_SNDBUF, &sndbuff, sizeof(sndbuff));
     setsockopt(recv_sock, SOL_SOCKET, SO_RCVBUF, &rcvbuff, sizeof(rcvbuff));
 
     int next_ttl_to_print = 1;
     int current_ttl = 1;
 
-    while (next_ttl_to_print <= MAX_TTL && !finished)
+    while (next_ttl_to_print <= config.max_ttl && !finished)
     {
-        while (current_ttl <= MAX_TTL &&
-               (current_ttl - next_ttl_to_print) < MAX_ACTIVE_TTLS)
+        while (current_ttl <= config.max_ttl &&
+               (current_ttl - next_ttl_to_print) < config.max_active_ttls &&
+               !finished)
         {
-            debug_print("Sending probes for TTL %d\n", current_ttl);
-            for (int i = 0; i < NUM_PROBES; i++)
+            for (int probe = 0; probe < config.num_probes; probe++)
             {
-                send_probe(current_ttl, i);
-                usleep(PROBE_DELAY);
+                send_probe(current_ttl, probe);
+                if (config.probe_delay_us > 0)
+                    usleep((useconds_t)config.probe_delay_us);
             }
-            gettimeofday(&last_probe_time[current_ttl - 1], NULL);
+            monotonic_now(&last_probe_time[current_ttl - 1]);
             current_ttl++;
-
-            for (int i = 0; i < INITIAL_RESP_CHECKS; i++)
-            {
-                if (process_responses(WAIT_TIMEOUT_MS) < 0)
-                    goto cleanup; // Handle select error
-            }
+            process_responses(0);
         }
 
-        for (int i = 0; i < LATER_RESP_CHECKS; i++)
-        {
-            if (process_responses(WAIT_TIMEOUT_MS) < 0)
-                goto cleanup; // Handle select error
-        }
+        process_responses(config.wait_timeout_ms);
 
-        struct timeval now;
-        gettimeofday(&now, NULL);
         int ttl = next_ttl_to_print;
+        struct timespec zero = {0, 0};
+        double time_elapsed = 0.0;
 
-        // Check if last probe time is valid before calculating elapsed time
-        double time_elapsed = 0;
-        if (last_probe_time[ttl - 1].tv_sec != 0 || last_probe_time[ttl - 1].tv_usec != 0)
+        if (memcmp(&last_probe_time[ttl - 1], &zero, sizeof(struct timespec)) != 0)
         {
-            struct timeval elapsed_diff;
-            timersub(&now, &last_probe_time[ttl - 1], &elapsed_diff);
-            time_elapsed = (double)elapsed_diff.tv_sec * 1000.0 + (double)elapsed_diff.tv_usec / 1000.0;
+            struct timespec now;
+            monotonic_now(&now);
+            time_elapsed = timespec_diff_ms(&last_probe_time[ttl - 1], &now);
         }
 
-        int all_received = 1;
-        for (int i = 0; i < NUM_PROBES; i++)
+        bool all_received = true;
+        for (int probe = 0; probe < config.num_probes; probe++)
         {
-            int idx = (ttl - 1) * NUM_PROBES + i;
-            if (idx < 0 || idx >= MAX_TTL * NUM_PROBES)
-            {                     // Bounds check
-                all_received = 0; // Should not happen if ttl is valid
-                break;
-            }
+            size_t idx = (size_t)(ttl - 1) * (size_t)config.num_probes + (size_t)probe;
             if (!probes[idx].received)
             {
-                all_received = 0;
+                all_received = false;
                 break;
             }
         }
 
-        // Check if ready to print: all probes received OR timeout occurred after sending
-        if (all_received || (time_elapsed > TTL_TIMEOUT && (last_probe_time[ttl - 1].tv_sec != 0 || last_probe_time[ttl - 1].tv_usec != 0)))
+        if (all_received ||
+            (time_elapsed > (double)config.ttl_timeout_ms &&
+             memcmp(&last_probe_time[ttl - 1], &zero, sizeof(struct timespec)) != 0))
         {
             printf("%-3d │ ", ttl);
 
-            struct in_addr hop_addrs[NUM_PROBES] = {0}; // Initialize
-            double hop_rtts[NUM_PROBES] = {0.0};
+            struct in_addr hop_addrs[MAX_PROBES_LIMIT];
+            double hop_rtts[MAX_PROBES_LIMIT];
+            memset(hop_addrs, 0, sizeof(hop_addrs));
+            memset(hop_rtts, 0, sizeof(hop_rtts));
+
             int unique_addrs = 0;
             int received_count = 0;
 
-            for (int i = 0; i < NUM_PROBES; i++)
+            for (int probe = 0; probe < config.num_probes; probe++)
             {
-                int idx = (ttl - 1) * NUM_PROBES + i;
-                if (idx < 0 || idx >= MAX_TTL * NUM_PROBES)
-                    continue; // Bounds check
+                size_t idx = (size_t)(ttl - 1) * (size_t)config.num_probes + (size_t)probe;
+                if (!probes[idx].received)
+                    continue;
 
-                if (probes[idx].received)
+                received_count++;
+                int existing_idx = -1;
+                for (int j = 0; j < unique_addrs; j++)
                 {
-                    received_count++;
-                    int is_unique = 1;
-                    int existing_idx = -1;
-                    for (int j = 0; j < unique_addrs; j++)
+                    if (hop_addrs[j].s_addr == probes[idx].addr.s_addr)
                     {
-                        if (hop_addrs[j].s_addr == probes[idx].addr.s_addr)
-                        {
-                            is_unique = 0;
-                            existing_idx = j;
-                            break;
-                        }
+                        existing_idx = j;
+                        break;
                     }
+                }
 
-                    if (is_unique)
-                    {
-                        if (unique_addrs < NUM_PROBES)
-                        { // Prevent overflow
-                            hop_addrs[unique_addrs] = probes[idx].addr;
-                            hop_rtts[unique_addrs] = probes[idx].rtt;
-                            unique_addrs++;
-                        }
-                    }
-                    else if (existing_idx >= 0)
-                    {
-                        double new_rtt = probes[idx].rtt;
-                        double old_rtt = hop_rtts[existing_idx];
-                        // Weighted average favoring lower RTTs
-                        hop_rtts[existing_idx] = (old_rtt * 0.4 + new_rtt * 0.6);
-                    }
+                if (existing_idx == -1 && unique_addrs < MAX_PROBES_LIMIT)
+                {
+                    hop_addrs[unique_addrs] = probes[idx].addr;
+                    hop_rtts[unique_addrs] = probes[idx].rtt;
+                    unique_addrs++;
+                }
+                else if (existing_idx >= 0)
+                {
+                    double prev = hop_rtts[existing_idx];
+                    hop_rtts[existing_idx] = (prev * 0.4) + (probes[idx].rtt * 0.6);
                 }
             }
 
-            if (received_count > 0)
+            if (received_count > 0 && unique_addrs > 0)
             {
-                int first_addr_printed = 0; // Flag to track if the first IP was printed
                 for (int i = 0; i < unique_addrs; i++)
                 {
-                    char *hostname = resolve_hostname(hop_addrs[i]);
+                    const char *hostname = resolve_hostname_cached(hop_addrs[i]);
                     if (i == 0)
                     {
                         printf("→ %-15s (%6.2f ms)", inet_ntoa(hop_addrs[i]), hop_rtts[i]);
-                        first_addr_printed = 1;
                     }
                     else
                     {
-                        // Indent subsequent unique IPs for the same TTL
                         printf("\n      └→ %-15s (%6.2f ms)", inet_ntoa(hop_addrs[i]), hop_rtts[i]);
                     }
                     if (hostname)
                     {
                         printf(" %s", hostname);
-                        free(hostname); // Free the duplicated string
                     }
-                    // Add newline after the first IP line only if there are more IPs for this TTL
-                    // or if it's the only IP for this TTL. Add newline always after subsequent IPs.
-                    if (i == 0 && unique_addrs > 1)
-                        printf("\n");
-                    else if (i > 0)
-                        printf("\n");
-                }
-                // Handle case where probes received but somehow unique_addrs is 0
-                if (unique_addrs == 0 && received_count > 0)
-                {
-                    printf("? ? ? (Error processing hops)\n");
-                }
-                else if (first_addr_printed && unique_addrs == 1)
-                {
-                    printf("\n"); // Ensure newline even if only one unique IP printed
+                    printf("\n");
                 }
 
                 if (hop_addrs[0].s_addr != 0 && hop_addrs[0].s_addr == dest_addr.sin_addr.s_addr)
@@ -553,20 +731,14 @@ int main(int argc, char *argv[])
             {
                 printf("* * * (timeout)\n");
             }
+
             next_ttl_to_print++;
         }
-        // Add a small sleep if no TTL was printed to prevent busy-waiting excessively
-        else if (current_ttl > MAX_TTL && next_ttl_to_print <= MAX_TTL)
+        else if (current_ttl > config.max_ttl && next_ttl_to_print <= config.max_ttl)
         {
-            usleep(10000); // Sleep 10ms if waiting for final TTL timeouts
+            usleep(10000);
         }
     }
 
-cleanup:
-    if (send_sock >= 0)
-        close(send_sock);
-    if (recv_sock >= 0)
-        close(recv_sock);
-
-    return finished ? 0 : 1; // Return 0 if target reached, 1 otherwise
+    return finished ? 0 : 1;
 }

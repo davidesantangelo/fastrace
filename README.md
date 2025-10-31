@@ -2,21 +2,29 @@
 
 A high-performance, dependency-free traceroute implementation in pure C.
 
+## New in 0.2.0
+
+- Fully non-blocking architecture driven by `poll()` for faster ICMP draining
+- Monotonic timing pipeline for sub-millisecond RTT accuracy
+- Runtime tuning via CLI flags for hops, probes, concurrency, and timeouts
+- Reverse DNS cache with optional suppression (`-n`) to optimise lookups
+- Expanded socket buffers and smarter probe scheduling for lower latency traces
+
 ## Overview
 
 Fastrace is a blazingly fast traceroute utility designed for network diagnostics and performance analysis. It maps the route that packets take across an IP network from source to destination, providing detailed timing information and identifying potential bottlenecks or routing issues.
 
 ## Technical Architecture
 
-### Core Design Principles
-
 - **Zero External Dependencies**: Relies solely on standard C libraries and system calls
-- **Maximum Performance**: Optimized for speed with parallel probing and efficient packet handling
-- **Low Memory Footprint**: Minimizes memory allocation and operates with a small, fixed memory budget
+- **Maximum Performance**: Event-driven pipeline with parallel probing and non-blocking IO
+- **Low Memory Footprint**: Uses compact data structures with tight allocations sized to the trace
 - **Dual Socket Implementation**: Uses UDP for probes and raw sockets for response capture
 - **Visual Route Mapping**: Displays network topology with a structured, tree-like representation
+- **Runtime Tunability**: Allows hop count, probe volume, concurrency, and DNS behaviour to be adjusted live
 
 ### Key Components
+
 
 #### 1. Dual Socket Architecture
 
@@ -45,30 +53,18 @@ typedef struct {
 } probe_t;
 ```
 
-#### 3. Concurrent Route Discovery
+#### 3. Adaptive Route Discovery
 
-Fastrace implements a multi-TTL probing system that maintains multiple active TTL probes:
-
-```c
-#define MAX_ACTIVE_TTLS 5   /* Maximum number of TTLs probed concurrently */
-```
+Fastrace implements a configurable multi-TTL probing system that keeps several hops "in flight" simultaneously. The concurrency window can be tuned at runtime (`-c <count>`), enabling the tracer to saturate available ICMP feedback channels without overwhelming links.
 
 #### 4. Efficient Response Processing
 
-The response processor uses `select()` with configurable timeouts to efficiently handle incoming packets without blocking:
+The response processor relies on a `poll()`-driven event loop and non-blocking sockets to eagerly drain ICMP bursts while avoiding idle busy-waiting:
 
 ```c
-int process_responses(int timeout_ms) {
-    fd_set readfds;
-    FD_ZERO(&readfds);
-    FD_SET(recv_sock, &readfds);
-    
-    struct timeval timeout;
-    timeout.tv_sec = timeout_ms / 1000;
-    timeout.tv_usec = (timeout_ms % 1000) * 1000;
-    
-    int ret = select(recv_sock + 1, &readfds, NULL, NULL, &timeout);
-    /* ... */
+struct pollfd pfd = { .fd = recv_sock, .events = POLLIN | POLLERR };
+if (poll(&pfd, 1, config.wait_timeout_ms) > 0) {
+    drain_icmp_socket();
 }
 ```
 
@@ -90,26 +86,19 @@ Fastrace provides a structured visual representation of network paths:
 
 ## Performance Optimizations
 
-### 1. Non-blocking I/O
+### 1. Poll-Based Event Loop
 
-Uses non-blocking I/O with timeout controls to prevent stalls during packet loss:
+Non-blocking sockets combined with `poll()` wakeups eliminate unnecessary sleeps and react instantly to bursts of ICMP replies.
 
-```c
-struct timeval timeout;
-timeout.tv_sec = RECV_TIMEOUT;
-timeout.tv_usec = 0;
-setsockopt(recv_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-```
+### 2. Adaptive Probe Batching
 
-### 2. Probe Batching
+Probe cadence is tuned via `config.probe_delay_us` and the runtime `-q` option, letting users increase sample density when needed without recompilation.
 
-Implements an efficient probe batching system that sends multiple probes per TTL:
+### 3. Monotonic Timing
 
-```c
-#define NUM_PROBES 3        /* Number of probes per TTL */
-```
+`clock_gettime(CLOCK_MONOTONIC)` powers RTT measurements and hop deadlines, delivering microsecond precision unaffected by system clock changes.
 
-### 3. Compiler Optimization
+### 4. Compiler Optimization
 
 Designed to be compiled with aggressive optimization flags:
 
@@ -117,16 +106,9 @@ Designed to be compiled with aggressive optimization flags:
 gcc -O3 -o fastrace fastrace.c
 ```
 
-### 4. Precise RTT Calculation
+### 5. DNS Caching
 
-Uses advanced timing techniques for accurate round-trip time measurements:
-
-```c
-/* Calculate RTT with microsecond precision using timersub */
-struct timeval diff;
-timersub(&recv_time, &probes[idx].sent_time, &diff);
-double rtt = ((double)diff.tv_sec * 1000.0) + ((double)diff.tv_usec / 1000.0);
-```
+A lightweight reverse DNS cache prevents repeated `PTR` lookups for load-balanced hops, cutting latency and reducing resolver load.
 
 ## Benchmark Comparison
 
@@ -233,6 +215,20 @@ Example:
 sudo ./fastrace google.com
 ```
 
+### Command-Line Options
+
+| Option | Description |
+|--------|-------------|
+| `-n` | Disable reverse DNS lookups (fastest output) |
+| `-m <hops>` | Set maximum hop count (default 30, max 128) |
+| `-q <probes>` | Set probes per hop (default 3, max 10) |
+| `-c <count>` | Set concurrent TTL window size (default 6) |
+| `-W <ms>` | Poll wait timeout in milliseconds (default 2) |
+| `-t <ms>` | Hop completion timeout in milliseconds (default 700) |
+| `-P <port>` | Base UDP destination port (default 33434) |
+| `-V` | Print version information |
+| `-h` | Display help message |
+
 ### Output Format
 
 ```
@@ -268,16 +264,7 @@ This visual format shows:
 
 ### TTL Mechanism
 
-The Time-to-Live (TTL) field in the IP header is systematically incremented to discover each router along the path:
-
-```c
-if (setsockopt(send_sock, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) < 0) {
-    perror("Error setting TTL");
-    return;
-}
-```
-
-When a packet's TTL reaches zero, the router generates an ICMP Time Exceeded message, revealing its address.
+The Time-to-Live (TTL) field in the IP header is systematically incremented to discover each router along the path. Each probe uses a unique UDP port derived from its TTL and probe index, allowing responses to be matched instantly.
 
 ### Probe Identification
 
@@ -291,33 +278,11 @@ This allows accurate matching of responses to their corresponding probes.
 
 ### Timing Precision
 
-High-resolution timing is implemented using `gettimeofday()`:
-
-```c
-struct timeval tv;
-gettimeofday(&tv, NULL);
-```
-
-Round-trip time calculation is performed with microsecond precision:
-
-```c
-double rtt = (recv_time.tv_sec - probes[idx].sent_time.tv_sec) * 1000.0 +
-            (recv_time.tv_usec - probes[idx].sent_time.tv_usec) / 1000.0;
-```
+RTT measurements now rely on the monotonic clock, protecting calculations from user/system time adjustments while preserving microsecond resolution.
 
 ### DNS Resolution
 
-Reverse DNS lookups are performed to provide hostname information for IP addresses:
-
-```c
-char *resolve_hostname(struct in_addr addr) {
-    struct hostent *host = gethostbyaddr(&addr, sizeof(addr), AF_INET);
-    if (host && host->h_name) {
-        return strdup(host->h_name);
-    }
-    return NULL;
-}
-```
+Reverse DNS lookups are cached for the lifetime of the run. Use `-n` to disable lookups entirely when only IP addresses are required.
 
 ## Protocol Details
 

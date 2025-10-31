@@ -1,6 +1,24 @@
 # Changelog
 All notable changes to FastRace will be documented in this file.
 
+## [0.2.0] - 2025-10-31
+
+### Performance
+- Rebuilt the event loop around non-blocking sockets with `poll()` to minimise wakeups and drain ICMP bursts efficiently
+- Switched to monotonic timing for nanosecond precision RTT tracking and tighter hop deadlines
+- Added adaptive concurrency controls with configurable probe counts, TTL windows, and wait intervals for faster convergence
+- Pre-generated probe payloads and optimised UDP emission cadence to cut per-packet overhead
+
+### Features
+- Introduced rich CLI options (`-n`, `-m`, `-q`, `-c`, `-W`, `-t`, `-P`, `-V`) for runtime tuning and DNS suppression
+- Added hostname resolution cache to avoid redundant reverse lookups and accelerate load-balanced hop reporting
+- Extended output banner with versioning and dynamic configuration summary for better observability
+
+### Reliability
+- Migrated to `getaddrinfo`/`getnameinfo` for thread-safe, standards-compliant name resolution
+- Hardened ICMP parsing logic with comprehensive bounds checks across packet layers
+- Expanded socket buffers and adopted safer resource cleanup to improve stability under heavy traffic
+
 ## [0.1.2] - 2025-04-01
 
 ### Security & Reliability
