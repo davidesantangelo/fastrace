@@ -36,7 +36,7 @@
 #define ICMP_PORT_UNREACH 3
 #endif
 
-#define VERSION "0.2.0"
+#define VERSION "0.2.1"
 #define PACKET_SIZE 60
 #define HOST_CACHE_SIZE 256
 #define MAX_TTL_LIMIT 128
@@ -69,8 +69,6 @@ typedef struct
     int ttl_timeout_ms;
     int probe_delay_us;
     int base_port;
-    double min_rtt;
-    double max_rtt;
     bool dns_enabled;
 } traceroute_config_t;
 
@@ -82,8 +80,6 @@ static traceroute_config_t config = {
     .ttl_timeout_ms = 700,
     .probe_delay_us = 250,
     .base_port = 33434,
-    .min_rtt = 0.05,
-    .max_rtt = 800.0,
     .dns_enabled = true};
 
 static int send_sock = -1;
@@ -360,10 +356,11 @@ static int handle_icmp_packet(const unsigned char *buffer, size_t bytes, const s
         if (!probes[idx].received && probes[idx].port == orig_port)
         {
             double rtt = timespec_diff_ms(&probes[idx].sent_time, recv_time);
-            if (rtt < config.min_rtt)
-                rtt = config.min_rtt;
-            else if (rtt > config.max_rtt)
-                rtt = config.max_rtt;
+            if (rtt < 0.0)
+            {
+                fprintf(stderr, "Warning: Negative RTT detected (%.3f ms) - clock issue?\n", rtt);
+                rtt = 0.0;
+            }
 
             probes[idx].received = true;
             probes[idx].addr = recv_addr->sin_addr;

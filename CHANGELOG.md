@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to FastRace will be documented in this file.
 
+## [0.2.1] - 2025-10-31
+
+### Fixed
+- Removed artificial RTT clamping (0.05ms min, 800ms max) that hid legitimate measurements and network anomalies
+- Now reports actual RTT values including sub-50µs localhost responses and >800ms long-distance links
+- Added sanity check for negative RTT values to detect clock issues while preserving diagnostic accuracy
+
 ## [0.2.0] - 2025-10-31
 
 ### Performance
