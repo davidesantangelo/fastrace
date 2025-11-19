@@ -34,9 +34,9 @@
     <section class="hero">
         <div class="container">
             <div class="hero-content">
-                <div class="version-badge">v0.2.1</div>
+                <div class="version-badge">v0.3.0</div>
                 <h2>A high-performance, dependency-free traceroute implementation in pure C</h2>
-                <p>Blazingly fast network diagnostics with minimal footprint • Non-blocking event loop • Runtime tuning</p>
+                <p>Blazingly fast network diagnostics with minimal footprint • Non-blocking event loop • Async DNS • Kernel Timestamps</p>
                 <div class="buttons">
                     <a href="#usage" class="button primary">Get Started</a>
                     <a href="https://github.com/davidesantangelo/fastrace" class="button secondary" target="_blank">View
@@ -118,8 +118,13 @@ TTL │ IP Address         (RTT ms)    Hostname
                 </div>
                 <div class="feature-card">
                     <i class="fas fa-server"></i>
-                    <h3>DNS Caching</h3>
-                    <p>Lightweight cache prevents redundant reverse lookups for load-balanced hops</p>
+                    <h3>Asynchronous DNS</h3>
+                    <p>Background thread handles reverse DNS lookups, preventing stalls during packet processing</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-clock"></i>
+                    <h3>Kernel Timestamps</h3>
+                    <p>Uses <code>SO_TIMESTAMP</code> for microsecond-precision packet arrival times directly from the kernel</p>
                 </div>
             </div>
         </div>
@@ -134,6 +139,7 @@ TTL │ IP Address         (RTT ms)    Hostname
                 <button class="tab-btn" data-tab="probe">Probe Structure</button>
                 <button class="tab-btn" data-tab="concurrent">Concurrent Discovery</button>
                 <button class="tab-btn" data-tab="response">Response Processing</button>
+                <button class="tab-btn" data-tab="async-dns">Async DNS</button>
                 <button class="tab-btn" data-tab="visualization">Path Visualization</button>
             </div>
 
@@ -188,13 +194,28 @@ config.num_probes = 3;</code></pre>
     }
     return 0;
 }</code></pre>
-                <p>RTT calculations are performed with nanosecond precision using monotonic time:</p>
-                <pre><code class="language-c">struct timespec start, end;
-clock_gettime(CLOCK_MONOTONIC, &start);
-// ... packet processing ...
-clock_gettime(CLOCK_MONOTONIC, &end);
+                <p>RTT calculations use kernel-provided timestamps (<code>SO_TIMESTAMP</code>) when available, falling back to monotonic time:</p>
+                <pre><code class="language-c">struct cmsghdr *cmsg;
+for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+    if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SO_TIMESTAMP) {
+        struct timeval *tv = (struct timeval *)CMSG_DATA(cmsg);
+        // ... use kernel timestamp ...
+    }
+}</code></pre>
+            </div>
 
-double rtt = timespec_diff_ms(&start, &end);</code></pre>
+            <div class="tab-content" id="async-dns">
+                <h3>Asynchronous DNS Resolution</h3>
+                <p>Hostname lookups are offloaded to a dedicated background thread to prevent blocking the main packet loop:</p>
+                <pre><code class="language-c">static void *dns_worker(void *arg) {
+    while (dns_running) {
+        // ... wait for queue item ...
+        if (getnameinfo(...) == 0) {
+            host_cache_store(item->addr, host);
+        }
+    }
+    return NULL;
+}</code></pre>
             </div>
 
             <div class="tab-content" id="visualization">
@@ -235,20 +256,20 @@ double rtt = timespec_diff_ms(&start, &end);</code></pre>
                         <tr>
                             <td>Total trace time (30 hops)</td>
                             <td>~15-20 seconds</td>
-                            <td>~4-7 seconds</td>
-                            <td><span class="highlight">65-75% faster</span></td>
+                            <td>~3-5 seconds</td>
+                            <td><span class="highlight">~4x faster (Async DNS)</span></td>
                         </tr>
                         <tr>
                             <td>Memory usage</td>
                             <td>~400-600 KB</td>
-                            <td>~80-120 KB</td>
-                            <td><span class="highlight">75-80% less memory</span></td>
+                            <td>~150-200 KB</td>
+                            <td><span class="highlight">60-70% less memory</span></td>
                         </tr>
                         <tr>
                             <td>CPU utilization</td>
                             <td>5-8%</td>
-                            <td>1-2%</td>
-                            <td><span class="highlight">70-80% less CPU</span></td>
+                            <td>2-3%</td>
+                            <td><span class="highlight">60% less CPU</span></td>
                         </tr>
                         <tr>
                             <td>Packet efficiency</td>
@@ -259,8 +280,8 @@ double rtt = timespec_diff_ms(&start, &end);</code></pre>
                         <tr>
                             <td>Response waiting</td>
                             <td>Fixed timeouts</td>
-                            <td>Adaptive timeouts</td>
-                            <td><span class="highlight">Better adaptation</span></td>
+                            <td>Non-blocking + Async DNS</td>
+                            <td><span class="highlight">No stalls during lookup</span></td>
                         </tr>
                         <tr>
                             <td>Visual clarity</td>
@@ -270,9 +291,9 @@ double rtt = timespec_diff_ms(&start, &end);</code></pre>
                         </tr>
                         <tr>
                             <td>RTT accuracy</td>
-                            <td>Variable</td>
-                            <td>Highly accurate</td>
-                            <td><span class="highlight">Matches standard tools</span></td>
+                            <td>User-space (~ms)</td>
+                            <td>Kernel-space (SO_TIMESTAMP)</td>
+                            <td><span class="highlight">Microsecond precision</span></td>
                         </tr>
                         <tr>
                             <td>Security features</td>
@@ -354,9 +375,9 @@ sudo ./fastrace -P 40000 google.com
             <div class="usage-grid two-column">
                 <div class="usage-card">
                     <h3>Manual Compilation</h3>
-                    <pre><code class="language-bash">gcc -O3 -o fastrace fastrace.c</code></pre>
+                    <pre><code class="language-bash">gcc -O3 -pthread -o fastrace fastrace.c</code></pre>
                     <p>For maximum performance:</p>
-                    <pre><code class="language-bash">gcc -O3 -march=native -mtune=native -flto -o fastrace fastrace.c</code></pre>
+                    <pre><code class="language-bash">gcc -O3 -march=native -mtune=native -flto -pthread -o fastrace fastrace.c</code></pre>
                 </div>
                 <div class="usage-card">
                     <h3>Basic Usage</h3>
@@ -404,7 +425,9 @@ sudo ./fastrace -P 40000 google.com
 #include &lt;sys/time.h&gt;
 #include &lt;sys/types.h&gt;
 #include &lt;time.h&gt;
-#include &lt;unistd.h&gt;</code></pre>
+#include &lt;unistd.h&gt;
+#include &lt;pthread.h&gt;
+#include &lt;signal.h&gt;</code></pre>
                 </div>
             </div>
         </div>
