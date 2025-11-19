@@ -2,9 +2,9 @@
 
 # Compiler and flags
 CC = gcc
-CFLAGS = -O3 -Wall -Wextra
-CFLAGS_DEBUG = -g -O0 -Wall -Wextra
-LDFLAGS =
+CFLAGS = -O3 -Wall -Wextra -pthread
+CFLAGS_DEBUG = -g -O0 -Wall -Wextra -pthread
+LDFLAGS = -pthread
 
 # Target binary
 TARGET = fastrace
@@ -47,6 +47,12 @@ uninstall:
 # Clean up build artifacts
 clean:
 	rm -f $(TARGET) $(TARGET_DEBUG)
+
+# Run tests
+test: $(TARGET)
+	@echo "Running tests..."
+	@chmod +x tests/test_basic.sh
+	@./tests/test_basic.sh
 
 # Help target
 help:

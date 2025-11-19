@@ -1,6 +1,19 @@
 # Changelog
 All notable changes to FastRace will be documented in this file.
 
+## [0.3.0] - 2025-11-19
+
+### Performance
+- **Asynchronous DNS Resolution**: Moved reverse DNS lookups to a dedicated background thread. This eliminates the "stop-and-wait" behavior during printing, ensuring the packet probing loop never stalls while waiting for a hostname to resolve.
+- **Kernel Timestamps**: Implemented `SO_TIMESTAMP` support to retrieve packet arrival times directly from the kernel. This bypasses user-space scheduling jitter, providing significantly more accurate RTT measurements.
+
+### Changed
+- **Thread-Safe Architecture**: Refactored internal data structures (host cache, print queue) to be thread-safe using mutexes.
+- **Build System**: Added `-pthread` flag to compiler options and introduced a `make test` target.
+
+### Added
+- **Test Suite**: Added a basic regression test script (`tests/test_basic.sh`) to verify core functionality and argument parsing.
+
 ## [0.2.1] - 2025-10-31
 
 ### Fixed

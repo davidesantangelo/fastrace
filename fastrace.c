@@ -25,6 +25,8 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <signal.h>
 
 #ifndef ICMP_TIME_EXCEEDED
 #define ICMP_TIME_EXCEEDED 11
@@ -36,7 +38,7 @@
 #define ICMP_PORT_UNREACH 3
 #endif
 
-#define VERSION "0.2.1"
+#define VERSION "0.3.0"
 #define PACKET_SIZE 60
 #define HOST_CACHE_SIZE 256
 #define MAX_TTL_LIMIT 128
@@ -82,11 +84,28 @@ static traceroute_config_t config = {
     .base_port = 33434,
     .dns_enabled = true};
 
+// Threading and Queue globals
+static pthread_t dns_thread_id;
+static pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t queue_cond = PTHREAD_COND_INITIALIZER;
+static volatile bool dns_running = true;
+static int dns_queue_size = 0;
+#define MAX_DNS_QUEUE_SIZE 1024
+
+typedef struct dns_queue_item {
+    struct in_addr addr;
+    struct dns_queue_item *next;
+} dns_queue_item_t;
+
+static dns_queue_item_t *dns_queue_head = NULL;
+static dns_queue_item_t *dns_queue_tail = NULL;
+
 static int send_sock = -1;
 static int recv_sock = -1;
 static char *target_host = NULL;
 static struct sockaddr_in dest_addr;
-static int finished = 0;
+static volatile sig_atomic_t finished = 0;
 static probe_t *probes = NULL;
 static struct timespec *last_probe_time = NULL;
 static host_cache_entry_t host_cache[HOST_CACHE_SIZE];
@@ -107,11 +126,99 @@ static int drain_icmp_socket(void);
 static int handle_icmp_packet(const unsigned char *buffer, size_t bytes, const struct sockaddr_in *recv_addr, const struct timespec *recv_time);
 static const char *resolve_hostname_cached(struct in_addr addr);
 static void host_cache_store(struct in_addr addr, const char *hostname);
-static const char *host_cache_lookup(struct in_addr addr);
+static char *host_cache_lookup(struct in_addr addr);
 static void free_host_cache(void);
+
+static void queue_dns_lookup(struct in_addr addr);
+static void *dns_worker(void *arg);
+
+static void queue_dns_lookup(struct in_addr addr)
+{
+    if (!config.dns_enabled) return;
+
+    pthread_mutex_lock(&queue_mutex);
+    if (dns_queue_size >= MAX_DNS_QUEUE_SIZE) {
+        pthread_mutex_unlock(&queue_mutex);
+        return;
+    }
+    pthread_mutex_unlock(&queue_mutex);
+
+    dns_queue_item_t *item = malloc(sizeof(dns_queue_item_t));
+    if (!item) return;
+    item->addr = addr;
+    item->next = NULL;
+
+    pthread_mutex_lock(&queue_mutex);
+    if (dns_queue_tail) {
+        dns_queue_tail->next = item;
+        dns_queue_tail = item;
+    } else {
+        dns_queue_head = dns_queue_tail = item;
+    }
+    dns_queue_size++;
+    pthread_cond_signal(&queue_cond);
+    pthread_mutex_unlock(&queue_mutex);
+}
+
+static void *dns_worker(void *arg)
+{
+    (void)arg;
+    while (dns_running) {
+        pthread_mutex_lock(&queue_mutex);
+        while (dns_queue_head == NULL && dns_running) {
+            pthread_cond_wait(&queue_cond, &queue_mutex);
+        }
+        
+        if (!dns_running) {
+            pthread_mutex_unlock(&queue_mutex);
+            break;
+        }
+
+        dns_queue_item_t *item = dns_queue_head;
+        dns_queue_head = item->next;
+        if (dns_queue_head == NULL) {
+            dns_queue_tail = NULL;
+        }
+        dns_queue_size--;
+        pthread_mutex_unlock(&queue_mutex);
+
+        char host[NI_MAXHOST];
+        struct sockaddr_in sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sin_family = AF_INET;
+        sa.sin_addr = item->addr;
+
+        if (getnameinfo((struct sockaddr *)&sa, sizeof(sa), host, sizeof(host), NULL, 0, NI_NAMEREQD) == 0)
+        {
+            host_cache_store(item->addr, host);
+        }
+        
+        free(item);
+    }
+    return NULL;
+}
 
 static void cleanup(void)
 {
+    dns_running = false;
+    pthread_mutex_lock(&queue_mutex);
+    pthread_cond_signal(&queue_cond);
+    pthread_mutex_unlock(&queue_mutex);
+    
+    if (dns_thread_id) {
+        pthread_join(dns_thread_id, NULL);
+    }
+
+    // Clear remaining queue
+    pthread_mutex_lock(&queue_mutex);
+    while (dns_queue_head) {
+        dns_queue_item_t *tmp = dns_queue_head;
+        dns_queue_head = dns_queue_head->next;
+        free(tmp);
+    }
+    dns_queue_tail = NULL;
+    pthread_mutex_unlock(&queue_mutex);
+
     if (send_sock >= 0)
     {
         close(send_sock);
@@ -285,13 +392,28 @@ static int process_responses(int timeout_ms)
 static int drain_icmp_socket(void)
 {
     int processed = 0;
+    struct msghdr msg;
+    struct iovec iov;
+    unsigned char buffer[2048];
+    char control[1024];
+    struct sockaddr_in recv_addr;
+
+    iov.iov_base = buffer;
+    iov.iov_len = sizeof(buffer);
+
+    msg.msg_name = &recv_addr;
+    msg.msg_namelen = sizeof(recv_addr);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
 
     for (;;)
     {
-        struct sockaddr_in recv_addr;
-        socklen_t addr_len = sizeof(recv_addr);
-        unsigned char buffer[2048];
-        ssize_t bytes = recvfrom(recv_sock, buffer, sizeof(buffer), MSG_DONTWAIT, (struct sockaddr *)&recv_addr, &addr_len);
+        msg.msg_namelen = sizeof(recv_addr);
+        msg.msg_controllen = sizeof(control);
+        
+        ssize_t bytes = recvmsg(recv_sock, &msg, MSG_DONTWAIT);
 
         if (bytes < 0)
         {
@@ -299,12 +421,32 @@ static int drain_icmp_socket(void)
                 break;
             if (errno == EINTR)
                 continue;
-            perror("recvfrom error");
+            perror("recvmsg error");
             break;
         }
 
         struct timespec recv_time;
-        monotonic_now(&recv_time);
+        bool time_found = false;
+
+        struct cmsghdr *cmsg;
+        for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg))
+        {
+#ifdef SO_TIMESTAMP
+            if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SO_TIMESTAMP)
+            {
+                struct timeval *tv = (struct timeval *)CMSG_DATA(cmsg);
+                recv_time.tv_sec = tv->tv_sec;
+                recv_time.tv_nsec = tv->tv_usec * 1000;
+                time_found = true;
+                break;
+            }
+#endif
+        }
+
+        if (!time_found)
+        {
+            monotonic_now(&recv_time);
+        }
 
         if (handle_icmp_packet(buffer, (size_t)bytes, &recv_addr, &recv_time) > 0)
         {
@@ -350,49 +492,61 @@ static int handle_icmp_packet(const unsigned char *buffer, size_t bytes, const s
     const struct udphdr *orig_udp = (const struct udphdr *)(buffer + ip_header_len + 8 + orig_ip_header_len);
     int orig_port = ntohs(orig_udp->uh_dport);
 
+    // Calculate probe index directly from port
+    int diff = orig_port - config.base_port;
+    if (diff < 0) return 1;
+
     size_t total_slots = (size_t)config.max_ttl * (size_t)config.num_probes;
-    for (size_t idx = 0; idx < total_slots; idx++)
+    if ((size_t)diff >= total_slots) return 1;
+
+    size_t idx = (size_t)diff;
+
+    if (!probes[idx].received)
     {
-        if (!probes[idx].received && probes[idx].port == orig_port)
+        double rtt = timespec_diff_ms(&probes[idx].sent_time, recv_time);
+        if (rtt < 0.0)
         {
-            double rtt = timespec_diff_ms(&probes[idx].sent_time, recv_time);
-            if (rtt < 0.0)
-            {
-                fprintf(stderr, "Warning: Negative RTT detected (%.3f ms) - clock issue?\n", rtt);
-                rtt = 0.0;
-            }
+            fprintf(stderr, "Warning: Negative RTT detected (%.3f ms) - clock issue?\n", rtt);
+            rtt = 0.0;
+        }
 
-            probes[idx].received = true;
-            probes[idx].addr = recv_addr->sin_addr;
-            probes[idx].rtt = rtt;
+        probes[idx].received = true;
+        probes[idx].addr = recv_addr->sin_addr;
+        probes[idx].rtt = rtt;
 
-            if (recv_addr->sin_addr.s_addr == dest_addr.sin_addr.s_addr &&
-                icmp->icmp_type == ICMP_DEST_UNREACH &&
-                icmp->icmp_code == ICMP_PORT_UNREACH)
-            {
-                finished = 1;
-            }
-            return 1;
+        queue_dns_lookup(recv_addr->sin_addr);
+
+        if (recv_addr->sin_addr.s_addr == dest_addr.sin_addr.s_addr &&
+            icmp->icmp_type == ICMP_DEST_UNREACH &&
+            icmp->icmp_code == ICMP_PORT_UNREACH)
+        {
+            finished = 1;
         }
     }
 
     return 1;
 }
 
-static const char *host_cache_lookup(struct in_addr addr)
+// Returns a copy that must be freed by caller
+static char *host_cache_lookup(struct in_addr addr)
 {
+    pthread_mutex_lock(&cache_mutex);
     for (size_t i = 0; i < HOST_CACHE_SIZE; i++)
     {
         if (host_cache[i].hostname && host_cache[i].addr.s_addr == addr.s_addr)
         {
-            return host_cache[i].hostname;
+            char *copy = strdup(host_cache[i].hostname);
+            pthread_mutex_unlock(&cache_mutex);
+            return copy;
         }
     }
+    pthread_mutex_unlock(&cache_mutex);
     return NULL;
 }
 
 static void host_cache_store(struct in_addr addr, const char *hostname)
 {
+    pthread_mutex_lock(&cache_mutex);
     size_t slot = host_cache_next % HOST_CACHE_SIZE;
     host_cache_next = (host_cache_next + 1) % HOST_CACHE_SIZE;
 
@@ -404,10 +558,12 @@ static void host_cache_store(struct in_addr addr, const char *hostname)
 
     host_cache[slot].addr = addr;
     host_cache[slot].hostname = strdup(hostname);
+    pthread_mutex_unlock(&cache_mutex);
 }
 
 static void free_host_cache(void)
 {
+    pthread_mutex_lock(&cache_mutex);
     for (size_t i = 0; i < HOST_CACHE_SIZE; i++)
     {
         if (host_cache[i].hostname)
@@ -416,6 +572,7 @@ static void free_host_cache(void)
             host_cache[i].hostname = NULL;
         }
     }
+    pthread_mutex_unlock(&cache_mutex);
 }
 
 static const char *resolve_hostname_cached(struct in_addr addr)
@@ -423,28 +580,19 @@ static const char *resolve_hostname_cached(struct in_addr addr)
     if (!config.dns_enabled)
         return NULL;
 
-    const char *cached = host_cache_lookup(addr);
-    if (cached)
-        return cached;
-
-    char host[NI_MAXHOST];
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_addr = addr;
-
-    if (getnameinfo((struct sockaddr *)&sa, sizeof(sa), host, sizeof(host), NULL, 0, NI_NAMEREQD) != 0)
-    {
-        return NULL;
-    }
-
-    host_cache_store(addr, host);
     return host_cache_lookup(addr);
+}
+
+static void handle_signal(int sig)
+{
+    (void)sig;
+    exit(0);
 }
 
 int main(int argc, char *argv[])
 {
     atexit(cleanup);
+    signal(SIGINT, handle_signal);
 
     int opt;
     while ((opt = getopt(argc, argv, "hnVm:q:c:W:t:P:")) != -1)
@@ -606,6 +754,19 @@ int main(int argc, char *argv[])
     set_cloexec(recv_sock);
     set_nonblocking(recv_sock);
 
+    int on = 1;
+#ifdef SO_TIMESTAMP
+    if (setsockopt(recv_sock, SOL_SOCKET, SO_TIMESTAMP, &on, sizeof(on)) < 0)
+        perror("setsockopt SO_TIMESTAMP failed");
+#endif
+
+    if (config.dns_enabled) {
+        if (pthread_create(&dns_thread_id, NULL, dns_worker, NULL) != 0) {
+            fprintf(stderr, "Warning: Failed to create DNS thread. DNS resolution disabled.\n");
+            config.dns_enabled = false;
+        }
+    }
+
     int sndbuff = SOCKET_BUFFER_SIZE;
     int rcvbuff = SOCKET_BUFFER_SIZE;
     setsockopt(send_sock, SOL_SOCKET, SO_SNDBUF, &sndbuff, sizeof(sndbuff));
@@ -715,6 +876,7 @@ int main(int argc, char *argv[])
                     if (hostname)
                     {
                         printf(" %s", hostname);
+                        free((void*)hostname);
                     }
                     printf("\n");
                 }
