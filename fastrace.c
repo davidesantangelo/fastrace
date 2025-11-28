@@ -38,7 +38,7 @@
 #define ICMP_PORT_UNREACH 3
 #endif
 
-#define VERSION "0.3.0"
+#define VERSION "0.3.1"
 #define PACKET_SIZE 60
 #define HOST_CACHE_SIZE 256
 #define MAX_TTL_LIMIT 128
@@ -426,27 +426,11 @@ static int drain_icmp_socket(void)
         }
 
         struct timespec recv_time;
-        bool time_found = false;
-
-        struct cmsghdr *cmsg;
-        for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg))
-        {
-#ifdef SO_TIMESTAMP
-            if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SO_TIMESTAMP)
-            {
-                struct timeval *tv = (struct timeval *)CMSG_DATA(cmsg);
-                recv_time.tv_sec = tv->tv_sec;
-                recv_time.tv_nsec = tv->tv_usec * 1000;
-                time_found = true;
-                break;
-            }
-#endif
-        }
-
-        if (!time_found)
-        {
-            monotonic_now(&recv_time);
-        }
+        
+        // Always use monotonic clock for RTT calculations.
+        // SO_TIMESTAMP provides wall-clock time which cannot be compared
+        // with monotonic sent_time, causing huge incorrect RTT values.
+        monotonic_now(&recv_time);
 
         if (handle_icmp_packet(buffer, (size_t)bytes, &recv_addr, &recv_time) > 0)
         {
@@ -753,12 +737,6 @@ int main(int argc, char *argv[])
     }
     set_cloexec(recv_sock);
     set_nonblocking(recv_sock);
-
-    int on = 1;
-#ifdef SO_TIMESTAMP
-    if (setsockopt(recv_sock, SOL_SOCKET, SO_TIMESTAMP, &on, sizeof(on)) < 0)
-        perror("setsockopt SO_TIMESTAMP failed");
-#endif
 
     if (config.dns_enabled) {
         if (pthread_create(&dns_thread_id, NULL, dns_worker, NULL) != 0) {

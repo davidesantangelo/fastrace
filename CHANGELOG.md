@@ -1,11 +1,15 @@
 # Changelog
 All notable changes to FastRace will be documented in this file.
 
+## [0.3.1] - 2025-11-28
+
+### Fixed
+- **Critical RTT Bug**: Fixed incorrect RTT measurements showing values like `1764330397890.64 ms`. The bug was caused by mixing `SO_TIMESTAMP` (wall-clock time from kernel) with `CLOCK_MONOTONIC` for sent timestamps. Now consistently uses monotonic clock for all RTT calculations.
+
 ## [0.3.0] - 2025-11-19
 
 ### Performance
 - **Asynchronous DNS Resolution**: Moved reverse DNS lookups to a dedicated background thread. This eliminates the "stop-and-wait" behavior during printing, ensuring the packet probing loop never stalls while waiting for a hostname to resolve.
-- **Kernel Timestamps**: Implemented `SO_TIMESTAMP` support to retrieve packet arrival times directly from the kernel. This bypasses user-space scheduling jitter, providing significantly more accurate RTT measurements.
 
 ### Changed
 - **Thread-Safe Architecture**: Refactored internal data structures (host cache, print queue) to be thread-safe using mutexes.
