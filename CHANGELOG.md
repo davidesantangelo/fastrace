@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to FastRace will be documented in this file.
 
+## [0.4.0] - 2025-12-04
+
+### Performance
+- **TTL Batching**: Sets socket TTL once per hop and sends probes in bursts, reducing per-packet syscalls and improving send-side throughput under high concurrency.
+- **Adaptive Waiting**: Poll wait now aligns to the earliest hop deadline, cutting idle spins while still draining the ICMP socket aggressively.
+
+### Added
+- **Probe Delay Flag**: New `-d <microseconds>` option exposes inter-probe pacing (default 250µs) to tune burstiness versus jitter.
+
+### Changed
+- **Clearer Hop Completion Logic**: Hop readiness now factors both full receipt and TTL deadlines, yielding more deterministic timeout behavior in noisy networks.
+
 ## [0.3.1] - 2025-11-28
 
 ### Fixed

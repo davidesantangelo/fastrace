@@ -38,7 +38,7 @@
 #define ICMP_PORT_UNREACH 3
 #endif
 
-#define VERSION "0.3.1"
+#define VERSION "0.4.0"
 #define PACKET_SIZE 60
 #define HOST_CACHE_SIZE 256
 #define MAX_TTL_LIMIT 128
@@ -120,7 +120,13 @@ static void set_cloexec(int fd);
 static void set_nonblocking(int fd);
 static void monotonic_now(struct timespec *ts);
 static double timespec_diff_ms(const struct timespec *start, const struct timespec *end);
-static void send_probe(int ttl, int probe_num);
+static int configure_ttl(int ttl);
+static void send_single_probe(int ttl, int probe_num);
+static void send_probe_batch(int ttl);
+static int compute_wait_timeout_ms(int next_ttl_to_print, int current_ttl);
+static bool ttl_all_received(int ttl);
+static bool ttl_ready_to_print(int ttl, const struct timespec *now);
+static void print_ttl_results(int ttl);
 static int process_responses(int timeout_ms);
 static int drain_icmp_socket(void);
 static int handle_icmp_packet(const unsigned char *buffer, size_t bytes, const struct sockaddr_in *recv_addr, const struct timespec *recv_time);
@@ -251,6 +257,7 @@ static void print_help(const char *prog_name)
     printf("  -m <hops>     Maximum hops to trace (1-%d) [default %d]\n", MAX_TTL_LIMIT, config.max_ttl);
     printf("  -q <probes>   Probes per hop (1-%d) [default %d]\n", MAX_PROBES_LIMIT, config.num_probes);
     printf("  -c <count>    Concurrent TTL window size [default %d]\n", config.max_active_ttls);
+    printf("  -d <us>       Inter-probe delay in microseconds [default %d]\n", config.probe_delay_us);
     printf("  -W <ms>       Poll wait timeout in milliseconds [default %d]\n", config.wait_timeout_ms);
     printf("  -t <ms>       Hop completion timeout in milliseconds [default %d]\n", config.ttl_timeout_ms);
     printf("  -P <port>     Base UDP destination port [default %d]\n", config.base_port);
@@ -317,20 +324,26 @@ static double timespec_diff_ms(const struct timespec *start, const struct timesp
     return (double)sec * 1000.0 + (double)nsec / 1000000.0;
 }
 
-static void send_probe(int ttl, int probe_num)
+static int configure_ttl(int ttl)
 {
-    if (send_sock < 0)
-        return;
     if (ttl < 1 || ttl > config.max_ttl)
-        return;
-    if (probe_num < 0 || probe_num >= config.num_probes)
-        return;
+        return -1;
 
     if (setsockopt(send_sock, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) < 0)
     {
         perror("Error setting TTL");
-        return;
+        return -1;
     }
+
+    return 0;
+}
+
+static void send_single_probe(int ttl, int probe_num)
+{
+    if (send_sock < 0)
+        return;
+    if (probe_num < 0 || probe_num >= config.num_probes)
+        return;
 
     int port = config.base_port + ((ttl - 1) * config.num_probes) + probe_num;
     struct sockaddr_in probe_dest = dest_addr;
@@ -359,6 +372,155 @@ static void send_probe(int ttl, int probe_num)
     probes[idx].received = false;
     probes[idx].addr.s_addr = 0;
     probes[idx].rtt = 0.0;
+}
+
+static void send_probe_batch(int ttl)
+{
+    if (send_sock < 0)
+        return;
+    if (configure_ttl(ttl) < 0)
+        return;
+
+    for (int probe = 0; probe < config.num_probes; probe++)
+    {
+        send_single_probe(ttl, probe);
+        if (config.probe_delay_us > 0)
+            usleep((useconds_t)config.probe_delay_us);
+    }
+
+    monotonic_now(&last_probe_time[ttl - 1]);
+}
+
+static bool ttl_all_received(int ttl)
+{
+    for (int probe = 0; probe < config.num_probes; probe++)
+    {
+        size_t idx = (size_t)(ttl - 1) * (size_t)config.num_probes + (size_t)probe;
+        if (!probes[idx].received)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ttl_ready_to_print(int ttl, const struct timespec *now)
+{
+    struct timespec zero = {0, 0};
+
+    if (ttl_all_received(ttl))
+    {
+        return true;
+    }
+
+    if (memcmp(&last_probe_time[ttl - 1], &zero, sizeof(struct timespec)) == 0)
+    {
+        return false;
+    }
+
+    double elapsed = timespec_diff_ms(&last_probe_time[ttl - 1], now);
+    return elapsed > (double)config.ttl_timeout_ms;
+}
+
+static int compute_wait_timeout_ms(int next_ttl_to_print, int current_ttl)
+{
+    struct timespec zero = {0, 0};
+    struct timespec now;
+    monotonic_now(&now);
+
+    double min_timeout = (double)config.wait_timeout_ms;
+
+    for (int ttl = next_ttl_to_print; ttl < current_ttl; ttl++)
+    {
+        if (memcmp(&last_probe_time[ttl - 1], &zero, sizeof(struct timespec)) != 0)
+        {
+            double elapsed = timespec_diff_ms(&last_probe_time[ttl - 1], &now);
+            double remaining = (double)config.ttl_timeout_ms - elapsed;
+            if (remaining < 0.0)
+                remaining = 0.0;
+            if (remaining < min_timeout)
+                min_timeout = remaining;
+        }
+    }
+
+    if (min_timeout < 0.0)
+        min_timeout = 0.0;
+    if (min_timeout > (double)config.wait_timeout_ms)
+        min_timeout = (double)config.wait_timeout_ms;
+
+    return (int)min_timeout;
+}
+
+static void print_ttl_results(int ttl)
+{
+    struct in_addr hop_addrs[MAX_PROBES_LIMIT];
+    double hop_rtts[MAX_PROBES_LIMIT];
+    memset(hop_addrs, 0, sizeof(hop_addrs));
+    memset(hop_rtts, 0, sizeof(hop_rtts));
+
+    int unique_addrs = 0;
+    int received_count = 0;
+
+    for (int probe = 0; probe < config.num_probes; probe++)
+    {
+        size_t idx = (size_t)(ttl - 1) * (size_t)config.num_probes + (size_t)probe;
+        if (!probes[idx].received)
+            continue;
+
+        received_count++;
+        int existing_idx = -1;
+        for (int j = 0; j < unique_addrs; j++)
+        {
+            if (hop_addrs[j].s_addr == probes[idx].addr.s_addr)
+            {
+                existing_idx = j;
+                break;
+            }
+        }
+
+        if (existing_idx == -1 && unique_addrs < MAX_PROBES_LIMIT)
+        {
+            hop_addrs[unique_addrs] = probes[idx].addr;
+            hop_rtts[unique_addrs] = probes[idx].rtt;
+            unique_addrs++;
+        }
+        else if (existing_idx >= 0)
+        {
+            double prev = hop_rtts[existing_idx];
+            hop_rtts[existing_idx] = (prev * 0.4) + (probes[idx].rtt * 0.6);
+        }
+    }
+
+    if (received_count > 0 && unique_addrs > 0)
+    {
+        for (int i = 0; i < unique_addrs; i++)
+        {
+            const char *hostname = resolve_hostname_cached(hop_addrs[i]);
+            if (i == 0)
+            {
+                printf("→ %-15s (%6.2f ms)", inet_ntoa(hop_addrs[i]), hop_rtts[i]);
+            }
+            else
+            {
+                printf("\n      └→ %-15s (%6.2f ms)", inet_ntoa(hop_addrs[i]), hop_rtts[i]);
+            }
+            if (hostname)
+            {
+                printf(" %s", hostname);
+                free((void *)hostname);
+            }
+            printf("\n");
+        }
+
+        if (hop_addrs[0].s_addr != 0 && hop_addrs[0].s_addr == dest_addr.sin_addr.s_addr)
+        {
+            finished = 1;
+        }
+    }
+    else
+    {
+        printf("* * * (timeout)\n");
+    }
 }
 
 static int process_responses(int timeout_ms)
@@ -579,7 +741,7 @@ int main(int argc, char *argv[])
     signal(SIGINT, handle_signal);
 
     int opt;
-    while ((opt = getopt(argc, argv, "hnVm:q:c:W:t:P:")) != -1)
+    while ((opt = getopt(argc, argv, "hnVm:q:c:d:W:t:P:")) != -1)
     {
         switch (opt)
         {
@@ -623,6 +785,17 @@ int main(int argc, char *argv[])
                 return 1;
             }
             config.max_active_ttls = value;
+            break;
+        }
+        case 'd':
+        {
+            int value = atoi(optarg);
+            if (value < 0)
+            {
+                fprintf(stderr, "Invalid inter-probe delay: %s\n", optarg);
+                return 1;
+            }
+            config.probe_delay_us = value;
             break;
         }
         case 'W':
@@ -759,119 +932,25 @@ int main(int argc, char *argv[])
                (current_ttl - next_ttl_to_print) < config.max_active_ttls &&
                !finished)
         {
-            for (int probe = 0; probe < config.num_probes; probe++)
-            {
-                send_probe(current_ttl, probe);
-                if (config.probe_delay_us > 0)
-                    usleep((useconds_t)config.probe_delay_us);
-            }
-            monotonic_now(&last_probe_time[current_ttl - 1]);
+            send_probe_batch(current_ttl);
             current_ttl++;
             process_responses(0);
         }
 
-        process_responses(config.wait_timeout_ms);
+        int dynamic_wait = compute_wait_timeout_ms(next_ttl_to_print, current_ttl);
+        process_responses(dynamic_wait);
 
-        int ttl = next_ttl_to_print;
-        struct timespec zero = {0, 0};
-        double time_elapsed = 0.0;
+        struct timespec now;
+        monotonic_now(&now);
 
-        if (memcmp(&last_probe_time[ttl - 1], &zero, sizeof(struct timespec)) != 0)
+        while (next_ttl_to_print < current_ttl && ttl_ready_to_print(next_ttl_to_print, &now))
         {
-            struct timespec now;
-            monotonic_now(&now);
-            time_elapsed = timespec_diff_ms(&last_probe_time[ttl - 1], &now);
-        }
-
-        bool all_received = true;
-        for (int probe = 0; probe < config.num_probes; probe++)
-        {
-            size_t idx = (size_t)(ttl - 1) * (size_t)config.num_probes + (size_t)probe;
-            if (!probes[idx].received)
-            {
-                all_received = false;
-                break;
-            }
-        }
-
-        if (all_received ||
-            (time_elapsed > (double)config.ttl_timeout_ms &&
-             memcmp(&last_probe_time[ttl - 1], &zero, sizeof(struct timespec)) != 0))
-        {
-            printf("%-3d │ ", ttl);
-
-            struct in_addr hop_addrs[MAX_PROBES_LIMIT];
-            double hop_rtts[MAX_PROBES_LIMIT];
-            memset(hop_addrs, 0, sizeof(hop_addrs));
-            memset(hop_rtts, 0, sizeof(hop_rtts));
-
-            int unique_addrs = 0;
-            int received_count = 0;
-
-            for (int probe = 0; probe < config.num_probes; probe++)
-            {
-                size_t idx = (size_t)(ttl - 1) * (size_t)config.num_probes + (size_t)probe;
-                if (!probes[idx].received)
-                    continue;
-
-                received_count++;
-                int existing_idx = -1;
-                for (int j = 0; j < unique_addrs; j++)
-                {
-                    if (hop_addrs[j].s_addr == probes[idx].addr.s_addr)
-                    {
-                        existing_idx = j;
-                        break;
-                    }
-                }
-
-                if (existing_idx == -1 && unique_addrs < MAX_PROBES_LIMIT)
-                {
-                    hop_addrs[unique_addrs] = probes[idx].addr;
-                    hop_rtts[unique_addrs] = probes[idx].rtt;
-                    unique_addrs++;
-                }
-                else if (existing_idx >= 0)
-                {
-                    double prev = hop_rtts[existing_idx];
-                    hop_rtts[existing_idx] = (prev * 0.4) + (probes[idx].rtt * 0.6);
-                }
-            }
-
-            if (received_count > 0 && unique_addrs > 0)
-            {
-                for (int i = 0; i < unique_addrs; i++)
-                {
-                    const char *hostname = resolve_hostname_cached(hop_addrs[i]);
-                    if (i == 0)
-                    {
-                        printf("→ %-15s (%6.2f ms)", inet_ntoa(hop_addrs[i]), hop_rtts[i]);
-                    }
-                    else
-                    {
-                        printf("\n      └→ %-15s (%6.2f ms)", inet_ntoa(hop_addrs[i]), hop_rtts[i]);
-                    }
-                    if (hostname)
-                    {
-                        printf(" %s", hostname);
-                        free((void*)hostname);
-                    }
-                    printf("\n");
-                }
-
-                if (hop_addrs[0].s_addr != 0 && hop_addrs[0].s_addr == dest_addr.sin_addr.s_addr)
-                {
-                    finished = 1;
-                }
-            }
-            else
-            {
-                printf("* * * (timeout)\n");
-            }
-
+            printf("%-3d │ ", next_ttl_to_print);
+            print_ttl_results(next_ttl_to_print);
             next_ttl_to_print++;
         }
-        else if (current_ttl > config.max_ttl && next_ttl_to_print <= config.max_ttl)
+
+        if (current_ttl > config.max_ttl && next_ttl_to_print <= config.max_ttl && !finished)
         {
             usleep(10000);
         }

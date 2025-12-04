@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fastrace - High-Performance Traceroute Implementation</title>
+    <title>Fastrace - Fast, Dependency-Free Traceroute</title>
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet"
@@ -34,9 +34,9 @@
     <section class="hero">
         <div class="container">
             <div class="hero-content">
-                <div class="version-badge">v0.3.1</div>
-                <h2>A high-performance, dependency-free traceroute implementation in pure C</h2>
-                <p>Blazingly fast network diagnostics with minimal footprint • Non-blocking event loop • Async DNS • Kernel Timestamps</p>
+                <div class="version-badge">v0.4.0</div>
+                <h2>Fast, dependency-free traceroute in pure C</h2>
+                <p>Non-blocking sockets • TTL batching • Adaptive waits • Async DNS • Tunable pacing</p>
                 <div class="buttons">
                     <a href="#usage" class="button primary">Get Started</a>
                     <a href="https://github.com/davidesantangelo/fastrace" class="button secondary" target="_blank">View
@@ -53,20 +53,18 @@
                     </div>
                     <div class="terminal-content">
                         <pre><code>$ sudo ./fastrace google.com
-fastrace
-Tracing route to google.com (142.250.180.174)
-Maximum hops: 30, Probes per hop: 3, Protocol: UDP
-TTL │ IP Address         (RTT ms)    Hostname
-────┼───────────────────────────────────────────
-1   │ → 192.168.1.1     (  3.58 ms)
-2   │ * * * (timeout)
-3   │ * * * (timeout)
-4   │ → 185.89.159.5    (  7.34 ms)
-5   │ → 213.250.43.77   ( 38.62 ms) bsn-250-43-77.static.siol.net
-6   │ → 193.77.107.46   ( 51.31 ms) bsn-77-107-46.static.siol.net
-7   │ * * * (timeout)
-8   │ → 142.251.235.172 ( 36.53 ms)
-      └→ 142.251.235.174 ( 35.54 ms)</code></pre>
+        fastrace 0.4.0
+        Tracing route to google.com (142.250.180.174)
+        Maximum hops: 30, Probes per hop: 3, Protocol: UDP
+        TTL | IP Address         (RTT ms)    Hostname
+        ----+-----------------------------------------
+        1   | -> 192.168.1.1     (  2.60 ms)
+        2   | * * * (timeout)
+        3   | * * * (timeout)
+        4   | -> 185.89.159.5    (  6.81 ms)
+        5   | -> 37.26.80.129    (  9.22 ms)
+        6   | -> 193.77.91.225   ( 29.88 ms) bsn-77-91-225.static.siol.net
+        7   | -> 193.77.107.46   ( 33.62 ms) bsn-77-107-46.static.siol.net</code></pre>
                     </div>
                 </div>
             </div>
@@ -84,47 +82,47 @@ TTL │ IP Address         (RTT ms)    Hostname
                 <div class="feature-card">
                     <i class="fas fa-bolt"></i>
                     <h3>Zero Dependencies</h3>
-                    <p>Relies solely on standard C libraries and system calls</p>
+                    <p>Pure C: libc + raw sockets, nothing else</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-layer-group"></i>
+                    <h3>TTL Batching</h3>
+                    <p>Sets TTL once per hop and sends probes in bursts to cut syscalls</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-stopwatch"></i>
+                    <h3>Adaptive Waits</h3>
+                    <p>Poll timing aligns to the next hop deadline to reduce idle spins</p>
                 </div>
                 <div class="feature-card">
                     <i class="fas fa-tachometer-alt"></i>
-                    <h3>Maximum Performance</h3>
-                    <p>Event-driven pipeline with non-blocking I/O and monotonic timing for sub-millisecond precision</p>
+                    <h3>Non-Blocking Core</h3>
+                    <p>Event-driven pipeline with monotonic timing for stable RTTs</p>
                 </div>
                 <div class="feature-card">
-                    <i class="fas fa-feather"></i>
-                    <h3>Low Memory Footprint</h3>
-                    <p>Compact data structures with dynamic allocation sized to trace configuration</p>
-                </div>
-                <div class="feature-card">
-                    <i class="fas fa-exchange-alt"></i>
-                    <h3>Dual Socket Implementation</h3>
-                    <p>Uses UDP for probes and raw sockets for response capture</p>
+                    <i class="fas fa-sliders-h"></i>
+                    <h3>Tunable Pacing</h3>
+                    <p>Inter-probe delay flag (<code>-d</code>) to balance burstiness and jitter</p>
                 </div>
                 <div class="feature-card">
                     <i class="fas fa-project-diagram"></i>
-                    <h3>Visual Route Mapping</h3>
-                    <p>Displays network topology with a structured, tree-like representation</p>
-                </div>
-                <div class="feature-card">
-                    <i class="fas fa-shield-alt"></i>
-                    <h3>Security-Focused Design</h3>
-                    <p>Implements secure socket handling with comprehensive bounds checking</p>
-                </div>
-                <div class="feature-card">
-                    <i class="fas fa-cogs"></i>
-                    <h3>Runtime Tunability</h3>
-                    <p>CLI options for hop count, probe volume, concurrency, timeouts, and DNS behavior</p>
+                    <h3>Clear Output</h3>
+                    <p>Tree-style hops show load-balanced branches and precise RTTs</p>
                 </div>
                 <div class="feature-card">
                     <i class="fas fa-server"></i>
-                    <h3>Asynchronous DNS</h3>
-                    <p>Background thread handles reverse DNS lookups, preventing stalls during packet processing</p>
+                    <h3>Async DNS</h3>
+                    <p>Dedicated thread for reverse lookups keeps the probe loop unblocked</p>
                 </div>
                 <div class="feature-card">
-                    <i class="fas fa-clock"></i>
-                    <h3>Kernel Timestamps</h3>
-                    <p>Uses <code>SO_TIMESTAMP</code> for microsecond-precision packet arrival times directly from the kernel</p>
+                    <i class="fas fa-shield-alt"></i>
+                    <h3>Hardened Parsing</h3>
+                    <p>Bounds-checked ICMP handling and strict resource cleanup</p>
+                </div>
+                <div class="feature-card">
+                    <i class="fas fa-feather"></i>
+                    <h3>Lightweight</h3>
+                    <p>Compact data structures sized to your trace configuration</p>
                 </div>
             </div>
         </div>
@@ -175,32 +173,27 @@ recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);</code></pre>
 config.max_active_ttls = 6;
 
 // Probes per hop (tunable via -q flag)
-config.num_probes = 3;</code></pre>
-                <p>While standard traceroute sequentially probes one TTL at a time, Fastrace processes multiple TTLs
-                    concurrently, dramatically reducing total trace time. The concurrency window can be adjusted at runtime to optimize for different network conditions.</p>
+config.num_probes = 3;
+
+// Inter-probe delay in microseconds (tunable via -d flag)
+config.probe_delay_us = 250;</code></pre>
+                <p>Multiple TTLs stay in flight at once. Probes for a hop are batched under a single TTL setsockopt, cutting syscall overhead. Tuning <code>-c</code>, <code>-q</code>, and <code>-d</code> lets you balance speed and jitter.</p>
             </div>
 
             <div class="tab-content" id="response">
                 <h3>Efficient Response Processing</h3>
-                <p>The response processor relies on a <code>poll()</code>-driven event loop with non-blocking sockets to eagerly drain ICMP bursts:</p>
+                <p>The response processor uses a <code>poll()</code>-driven loop with non-blocking sockets to drain ICMP bursts. Time is monotonic throughout for stable RTT math:</p>
                 <pre><code class="language-c">int process_responses(int timeout_ms) {
-    struct pollfd pfd = {
-        .fd = recv_sock, 
-        .events = POLLIN | POLLERR | POLLHUP
-    };
-    
-    if (poll(&pfd, 1, timeout_ms) > 0) {
-        return drain_icmp_socket();
-    }
-    return 0;
-}</code></pre>
-                <p>RTT calculations use kernel-provided timestamps (<code>SO_TIMESTAMP</code>) when available, falling back to monotonic time:</p>
-                <pre><code class="language-c">struct cmsghdr *cmsg;
-for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
-    if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SO_TIMESTAMP) {
-        struct timeval *tv = (struct timeval *)CMSG_DATA(cmsg);
-        // ... use kernel timestamp ...
-    }
+    struct pollfd pfd = { .fd = recv_sock, .events = POLLIN | POLLERR | POLLHUP };
+    if (timeout_ms > 0 && poll(&pfd, 1, timeout_ms) <= 0) return 0;
+    return drain_icmp_socket();
+}
+
+static double timespec_diff_ms(const struct timespec *start, const struct timespec *end) {
+    time_t sec = end->tv_sec - start->tv_sec;
+    long nsec = end->tv_nsec - start->tv_nsec;
+    if (nsec < 0) { sec -= 1; nsec += 1000000000L; }
+    return (double)sec * 1000.0 + (double)nsec / 1000000.0;
 }</code></pre>
             </div>
 
@@ -239,70 +232,13 @@ for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
 
     <section id="performance" class="performance">
         <div class="container">
-            <h2>Performance Benchmarks</h2>
-            <p>Fastrace significantly outperforms standard traceroute in several key metrics:</p>
-
-            <div class="comparison-table">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Metric</th>
-                            <th>Standard Traceroute</th>
-                            <th>Fastrace</th>
-                            <th>Improvement</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td>Total trace time (30 hops)</td>
-                            <td>~15-20 seconds</td>
-                            <td>~3-5 seconds</td>
-                            <td><span class="highlight">~4x faster (Async DNS)</span></td>
-                        </tr>
-                        <tr>
-                            <td>Memory usage</td>
-                            <td>~400-600 KB</td>
-                            <td>~150-200 KB</td>
-                            <td><span class="highlight">60-70% less memory</span></td>
-                        </tr>
-                        <tr>
-                            <td>CPU utilization</td>
-                            <td>5-8%</td>
-                            <td>2-3%</td>
-                            <td><span class="highlight">60% less CPU</span></td>
-                        </tr>
-                        <tr>
-                            <td>Packet efficiency</td>
-                            <td>1 TTL at a time</td>
-                            <td>Up to 6+ TTLs concurrently</td>
-                            <td><span class="highlight">6x+ throughput</span></td>
-                        </tr>
-                        <tr>
-                            <td>Response waiting</td>
-                            <td>Fixed timeouts</td>
-                            <td>Non-blocking + Async DNS</td>
-                            <td><span class="highlight">No stalls during lookup</span></td>
-                        </tr>
-                        <tr>
-                            <td>Visual clarity</td>
-                            <td>Flat output</td>
-                            <td>Hierarchical tree view</td>
-                            <td><span class="highlight">Improved readability</span></td>
-                        </tr>
-                        <tr>
-                            <td>RTT accuracy</td>
-                            <td>User-space (~ms)</td>
-                            <td>Kernel-space (SO_TIMESTAMP)</td>
-                            <td><span class="highlight">Microsecond precision</span></td>
-                        </tr>
-                        <tr>
-                            <td>Security features</td>
-                            <td>Basic</td>
-                            <td>Comprehensive</td>
-                            <td><span class="highlight">Enhanced protection</span></td>
-                        </tr>
-                    </tbody>
-                </table>
+            <h2>Performance at a Glance</h2>
+            <p>Designed to stay fast and responsive under load: batched TTL sends, adaptive waits, non-blocking sockets, and async DNS.</p>
+            <div class="feature-grid" style="margin-top:2rem;">
+                <div class="feature-card"><i class="fas fa-rocket"></i><h3>Faster Routes</h3><p>Multiple TTLs in flight plus batched probes cut total trace time.</p></div>
+                <div class="feature-card"><i class="fas fa-microchip"></i><h3>Lower Overhead</h3><p>Fewer syscalls per hop and tight data structures reduce CPU and memory use.</p></div>
+                <div class="feature-card"><i class="fas fa-wave-square"></i><h3>Steady Timing</h3><p>Monotonic clock for RTTs avoids drift from wall-clock adjustments.</p></div>
+                <div class="feature-card"><i class="fas fa-route"></i><h3>Clear Output</h3><p>Tree-style rendering highlights branching paths and per-hop RTTs.</p></div>
             </div>
         </div>
     </section>
@@ -345,8 +281,8 @@ sudo ./fastrace -n google.com
 # Set maximum hops and probes per hop
 sudo ./fastrace -m 20 -q 5 google.com
 
-# Adjust concurrent TTL window and timeouts
-sudo ./fastrace -c 8 -W 2 -t 700 google.com
+# Adjust concurrent TTL window, pacing, and timeouts
+sudo ./fastrace -c 8 -d 250 -W 2 -t 700 google.com
 
 # Use custom base port
 sudo ./fastrace -P 40000 google.com
@@ -364,6 +300,7 @@ sudo ./fastrace -P 40000 google.com
                         <tr><td><code>-c &lt;count&gt;</code></td><td>Concurrent TTL window size (default 6)</td></tr>
                         <tr><td><code>-W &lt;ms&gt;</code></td><td>Poll wait timeout in milliseconds (default 2)</td></tr>
                         <tr><td><code>-t &lt;ms&gt;</code></td><td>Hop completion timeout in milliseconds (default 700)</td></tr>
+                        <tr><td><code>-d &lt;us&gt;</code></td><td>Inter-probe delay in microseconds (default 250)</td></tr>
                         <tr><td><code>-P &lt;port&gt;</code></td><td>Base UDP destination port (default 33434)</td></tr>
                         <tr><td><code>-V</code></td><td>Print version information</td></tr>
                         <tr><td><code>-h</code></td><td>Display help message</td></tr>
