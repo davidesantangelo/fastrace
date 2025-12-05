@@ -38,7 +38,7 @@
 #define ICMP_PORT_UNREACH 3
 #endif
 
-#define VERSION "0.4.0"
+#define VERSION "0.4.1"
 #define PACKET_SIZE 60
 #define HOST_CACHE_SIZE 256
 #define MAX_TTL_LIMIT 128
@@ -93,6 +93,10 @@ static volatile bool dns_running = true;
 static int dns_queue_size = 0;
 #define MAX_DNS_QUEUE_SIZE 1024
 
+// DNS pool allocator to reduce malloc overhead
+#define DNS_POOL_SIZE 64
+static int dns_pool_next = 0;
+
 typedef struct dns_queue_item {
     struct in_addr addr;
     struct dns_queue_item *next;
@@ -111,6 +115,11 @@ static struct timespec *last_probe_time = NULL;
 static host_cache_entry_t host_cache[HOST_CACHE_SIZE];
 static size_t host_cache_next = 0;
 static unsigned char base_payload[PACKET_SIZE];
+static dns_queue_item_t dns_pool[DNS_POOL_SIZE];
+
+// Statistics counters
+static int stats_probes_sent = 0;
+static int stats_responses_received = 0;
 
 static void cleanup(void);
 static void print_help(const char *prog_name);
@@ -138,6 +147,20 @@ static void free_host_cache(void);
 static void queue_dns_lookup(struct in_addr addr);
 static void *dns_worker(void *arg);
 
+static dns_queue_item_t *dns_pool_alloc(void)
+{
+    if (dns_pool_next < DNS_POOL_SIZE)
+        return &dns_pool[dns_pool_next++];
+    return malloc(sizeof(dns_queue_item_t));
+}
+
+static void dns_pool_free(dns_queue_item_t *item)
+{
+    // Only free if not from pool (item address outside pool range)
+    if (item < dns_pool || item >= dns_pool + DNS_POOL_SIZE)
+        free(item);
+}
+
 static void queue_dns_lookup(struct in_addr addr)
 {
     if (!config.dns_enabled) return;
@@ -149,7 +172,7 @@ static void queue_dns_lookup(struct in_addr addr)
     }
     pthread_mutex_unlock(&queue_mutex);
 
-    dns_queue_item_t *item = malloc(sizeof(dns_queue_item_t));
+    dns_queue_item_t *item = dns_pool_alloc();
     if (!item) return;
     item->addr = addr;
     item->next = NULL;
@@ -199,7 +222,7 @@ static void *dns_worker(void *arg)
             host_cache_store(item->addr, host);
         }
         
-        free(item);
+        dns_pool_free(item);
     }
     return NULL;
 }
@@ -220,7 +243,7 @@ static void cleanup(void)
     while (dns_queue_head) {
         dns_queue_item_t *tmp = dns_queue_head;
         dns_queue_head = dns_queue_head->next;
-        free(tmp);
+        dns_pool_free(tmp);
     }
     dns_queue_tail = NULL;
     pthread_mutex_unlock(&queue_mutex);
@@ -384,8 +407,11 @@ static void send_probe_batch(int ttl)
     for (int probe = 0; probe < config.num_probes; probe++)
     {
         send_single_probe(ttl, probe);
-        if (config.probe_delay_us > 0)
-            usleep((useconds_t)config.probe_delay_us);
+        stats_probes_sent++;
+        if (config.probe_delay_us > 0) {
+            struct timespec delay = {0, config.probe_delay_us * 1000L};
+            nanosleep(&delay, NULL);
+        }
     }
 
     monotonic_now(&last_probe_time[ttl - 1]);
@@ -659,6 +685,7 @@ static int handle_icmp_packet(const unsigned char *buffer, size_t bytes, const s
         probes[idx].received = true;
         probes[idx].addr = recv_addr->sin_addr;
         probes[idx].rtt = rtt;
+        stats_responses_received++;
 
         queue_dns_lookup(recv_addr->sin_addr);
 
@@ -925,14 +952,18 @@ int main(int argc, char *argv[])
 
     int next_ttl_to_print = 1;
     int current_ttl = 1;
+    int max_sent_ttl = 0;  // Track highest TTL we've sent probes for
 
-    while (next_ttl_to_print <= config.max_ttl && !finished)
+    // Main loop: continue until we've printed all sent hops
+    while (next_ttl_to_print <= config.max_ttl)
     {
+        // Send probes for new TTLs (stop when finished or window full)
         while (current_ttl <= config.max_ttl &&
                (current_ttl - next_ttl_to_print) < config.max_active_ttls &&
                !finished)
         {
             send_probe_batch(current_ttl);
+            max_sent_ttl = current_ttl;
             current_ttl++;
             process_responses(0);
         }
@@ -950,11 +981,23 @@ int main(int argc, char *argv[])
             next_ttl_to_print++;
         }
 
-        if (current_ttl > config.max_ttl && next_ttl_to_print <= config.max_ttl && !finished)
+        // Exit when: destination reached AND all sent hops printed
+        if (finished && next_ttl_to_print > max_sent_ttl)
+        {
+            break;
+        }
+
+        // Keep waiting for remaining hops if we've stopped sending
+        if (current_ttl > config.max_ttl && next_ttl_to_print <= max_sent_ttl && !finished)
         {
             usleep(10000);
         }
     }
+
+    // Print trace statistics
+    printf("\nTrace complete. Hops: %d, Responses: %d/%d (%.1f%%)\n",
+           next_ttl_to_print - 1, stats_responses_received, stats_probes_sent,
+           stats_probes_sent > 0 ? (100.0 * stats_responses_received / stats_probes_sent) : 0.0);
 
     return finished ? 0 : 1;
 }
