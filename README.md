@@ -125,6 +125,35 @@ TTL | IP Address         (RTT ms)    Hostname
 7   | -> 193.77.107.46   ( 33.62 ms) bsn-77-107-46.static.siol.net
 ```
 
+## Running without sudo (optional)
+
+If you prefer not to type `sudo` every time:
+
+**macOS** (setuid):
+```bash
+sudo chown root:wheel ./fastrace
+sudo chmod u+s ./fastrace
+```
+
+**Linux** (capabilities, recommended):
+```bash
+sudo setcap cap_net_raw+ep ./fastrace
+```
+
+**Linux** (setuid, alternative):
+```bash
+sudo chown root:root ./fastrace
+sudo chmod u+s ./fastrace
+```
+
+Then run directly:
+
+```bash
+./fastrace google.com
+```
+
+> ⚠️ **Security note**: This allows any local user to run fastrace with root privileges. Use only on personal machines.
+
 ## Notes
 
 - Requires root/sudo for raw ICMP.
