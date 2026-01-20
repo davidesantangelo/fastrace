@@ -2,9 +2,15 @@
 
 # Compiler and flags
 CC = gcc
-CFLAGS = -O3 -Wall -Wextra -pthread
-CFLAGS_DEBUG = -g -O0 -Wall -Wextra -pthread
-LDFLAGS = -pthread
+CFLAGS = -O3 -Wall -Wextra -Wpedantic -pthread
+CFLAGS_DEBUG = -g -O0 -Wall -Wextra -Wpedantic -pthread -DDEBUG
+LDFLAGS = -pthread -lm
+
+# Platform-specific optimizations
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    CFLAGS += -D_GNU_SOURCE
+endif
 
 # Target binary
 TARGET = fastrace
@@ -12,7 +18,7 @@ TARGET_DEBUG = fastrace_debug
 
 # Source files
 SRC = fastrace.c
-HEADERS = 
+HEADERS =
 
 # Installation directories
 PREFIX = /usr/local
@@ -47,12 +53,25 @@ uninstall:
 # Clean up build artifacts
 clean:
 	rm -f $(TARGET) $(TARGET_DEBUG)
+	rm -rf *.dSYM
 
-# Run tests
+# Run basic tests (non-root)
 test: $(TARGET)
 	@echo "Running tests..."
 	@chmod +x tests/test_basic.sh
 	@./tests/test_basic.sh
+
+# Run full test suite (requires root)
+test-full: $(TARGET)
+	@echo "Running full test suite (requires root)..."
+	@chmod +x tests/test_full.sh
+	@sudo ./tests/test_full.sh
+
+# Run benchmark
+benchmark: $(TARGET)
+	@echo "Running benchmark..."
+	@chmod +x tests/bench.sh
+	@sudo ./tests/bench.sh
 
 # Help target
 help:
@@ -63,9 +82,12 @@ help:
 	@echo "  make install      - Install fastrace to $(BINDIR)"
 	@echo "  make uninstall    - Remove fastrace from $(BINDIR)"
 	@echo "  make clean        - Remove build artifacts"
+	@echo "  make test         - Run basic tests (non-root)"
+	@echo "  make test-full    - Run full test suite (requires root)"
+	@echo "  make benchmark    - Run performance benchmark"
 	@echo "  make help         - Display this help message"
 	@echo ""
 	@echo "Note: Running fastrace requires root privileges."
-	@echo "Usage: sudo fastrace <hostname>"
+	@echo "Usage: sudo fastrace [options] <hostname>"
 
-.PHONY: all debug optimized install uninstall clean help
+.PHONY: all debug optimized install uninstall clean test test-full benchmark help

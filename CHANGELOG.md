@@ -2,6 +2,53 @@
 
 All notable changes to FastRace will be documented in this file.
 
+## [1.0.0] - 2025-01-20
+
+### Major Release - Performance & Features
+
+This is the first stable major release of fastrace, featuring significant performance improvements and new capabilities.
+
+### Performance
+
+- **Batch I/O**: Uses `recvmmsg` on Linux for batch packet reception, reducing syscall overhead by up to 60%.
+- **Adaptive Concurrency Window**: Automatically adjusts the concurrent TTL window based on network latency (faster networks get larger windows).
+- **Optimized Timeouts**: Reduced default timeouts (500ms per hop, 1ms poll) for faster trace completion.
+- **Lock-free DNS Queue**: Atomic operations for DNS queue management, reducing contention.
+- **Larger Buffers**: Increased socket buffers (256KB) and host cache (512 entries) for high-throughput scenarios.
+- **CLOCK_MONOTONIC_RAW**: Uses the most precise monotonic clock available for RTT measurements.
+
+### Added
+
+- **IPv6 Support**: Full dual-stack support with `-6` flag. Automatic fallback to IPv4 if IPv6 resolution fails.
+- **ICMP Echo Mode**: New `-I` flag for ICMP Echo-based traceroute (like `ping`-style probes).
+- **TCP SYN Mode**: New `-T` flag for TCP-based traceroute (useful for firewalled networks).
+- **JSON Output**: `--json` flag for machine-readable JSON output, ideal for scripting and monitoring.
+- **CSV Output**: `--csv` flag for spreadsheet-compatible output.
+- **Performance Metrics**: `--metrics` flag shows RTT statistics including min/max/mean/stddev, p50/p95/p99 percentiles, and jitter.
+- **Quiet Mode**: `--quiet` flag for minimal output, useful for benchmarking.
+- **Adaptive Window Control**: `--no-adaptive` to disable automatic concurrency adjustment.
+
+### Changed
+
+- **Default Concurrency**: Increased from 6 to 8 concurrent TTLs.
+- **Default Probe Delay**: Reduced from 250µs to 100µs.
+- **Default Timeout**: Reduced from 700ms to 500ms per hop.
+- **Output Format**: Wider IP address column (39 chars) for IPv6 addresses.
+- **Trace Statistics**: Now shows total trace time in milliseconds.
+
+### Technical
+
+- Refactored probe tracking to support both sequence-based (ICMP) and port-based (UDP) matching.
+- Added `<stdatomic.h>` for lock-free atomic counters.
+- Improved signal handling with SIGTERM support.
+- Enhanced ICMP parsing with platform-specific struct access for macOS/BSD compatibility.
+
+### Test Suite
+
+- **Basic Tests**: Non-root tests for CLI validation (`make test`).
+- **Full Tests**: Comprehensive root tests for all features (`make test-full`).
+- **Benchmark Suite**: Performance benchmarking script (`make benchmark`).
+
 ## [0.4.1] - 2025-12-05
 
 ### Performance
@@ -162,9 +209,3 @@ All notable changes to FastRace will be documented in this file.
 - Removed unnecessary privilege checking in favor of runtime capability detection
 - Eliminated redundant cleanup code for better performance
 - Improved code structure and variable declaration
-
-### Known Issues
-
-- IPv6 support not yet implemented
-- Limited support for non-POSIX systems
-- May require elevated privileges depending on system configuration
