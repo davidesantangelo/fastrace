@@ -65,7 +65,24 @@ traceroute to google.com (142.250.180.174), 64 hops max, 40 byte packets
 
 </details>
 
-## Quick Install
+## Installation
+
+### Homebrew (macOS/Linux)
+
+The easiest way to install on macOS or Linux:
+
+```bash
+brew install fastrace
+```
+
+[![Homebrew](https://img.shields.io/badge/Homebrew-fastrace-orange)](https://formulae.brew.sh/formula/fastrace)
+
+Supported platforms:
+- macOS (Apple Silicon): Tahoe, Sequoia, Sonoma
+- macOS (Intel): Sonoma
+- Linux: ARM64, x86_64
+
+### Build from Source
 
 ```bash
 make                 # optimized build
